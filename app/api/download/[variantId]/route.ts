@@ -1,6 +1,6 @@
-// Download an approved ad (PLAN.md §1 step 4: download appears once approved). Served from our
-// own route so the browser saves the file with a readable name instead of opening a
-// cross-origin Storage URL.
+// Download an approved ad (PLAN.md §1 step 4: download appears once approved). The route checks
+// approval, then redirects to Storage with a download filename. It doesn't stream the file
+// itself: a final render is ~5 MB and Vercel functions cap a response at 4.5 MB.
 
 import { BUCKET, supabaseServer } from '@/lib/supabase/server';
 
@@ -15,11 +15,9 @@ export async function GET(_req: Request, { params }: { params: Promise<{ variant
   if (!v?.render) return new Response('not found', { status: 404 });
   if (v.status !== 'approved') return new Response('approve this ad before downloading it', { status: 403 });
 
-  const file = await db.storage.from(BUCKET).download(v.render.storage_path);
-  if (file.error) return new Response('could not read the file', { status: 502 });
   const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
   const name = [v.campaigns?.brand_kits?.short_name, v.ads?.products?.title, v.ads?.angle, `v${v.version}`].filter(Boolean).map((x) => slug(String(x))).join('-');
-  return new Response(file.data, {
-    headers: { 'content-type': 'image/png', 'content-disposition': `attachment; filename="${name}.png"` },
-  });
+  // Storage sets Content-Disposition: attachment with this name when ?download= is present.
+  const url = db.storage.from(BUCKET).getPublicUrl(v.render.storage_path, { download: `${name}.png` }).data.publicUrl;
+  return Response.redirect(url, 302);
 }
