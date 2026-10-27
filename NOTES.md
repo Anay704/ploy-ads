@@ -30,7 +30,7 @@ Each render was compared at full size against its source photo. The logo zone wa
 **Not built: the composite fallback.** A model passed the fidelity gate, so overlaying the untouched photo isn't needed. It stays documented in PLAN.md §5 in case M4 sees drift on other products.
 
 **What the bake-off changed in the plan.**
-1. **The vision text check is core, not stretch.** 1 doubled headline in 4 Pro runs is a small sample, but a marketer would never run that ad, and nothing else in the pipeline would catch it. Every render is now checked by `anthropic/claude-haiku-5-5`: the headline and CTA must each appear exactly once, with no other legible text. On a mismatch the variant retries once, then becomes `failed` with the reason (PLAN.md §5).
+1. **The vision text check is core, not stretch.** 1 doubled headline in 4 Pro runs is a small sample, but a marketer would never run that ad, and nothing else in the pipeline would catch it. Every render is now checked by Claude Haiku 5.5: the headline and CTA must each appear exactly once, with no other legible text. On a mismatch the variant retries once, then becomes `failed` with the reason (PLAN.md §5).
 2. **The logo safe zone needs a verified fix.** 6 of 12 renders, across all three models, put the headline inside the top 12%. M4 strengthens the wording and re-runs 2 Pro renders against the same 12% line. If either still crosses it, the logo moves to the bottom strip above the CTA instead of fighting the model (PLAN.md §5).
 
 **Smaller findings, now in PLAN.md.**
@@ -49,3 +49,38 @@ Each render was compared at full size against its source photo. The logo zone wa
   - The prompt's `Palette:` line sits inside SCENE, which reads as "make the scene pink and mint".
 
   M4 gives each angle a clearly different scene direction and limits the palette to text, button and accents (PLAN.md §5, "Scene variety").
+
+## M1: data layer (2026-10-27)
+
+- **Demo data is world-readable, on purpose.** RLS allows reads where `owner_id is null`, and the publishable key ships in the browser bundle, so anyone with the deployed URL can read every brand kit, campaign (including its saved chat) and ad. That's acceptable for a single-user demo with no accounts: the data is a public store's catalog and brand plus the ads made from it, and writes are blocked for that key. The `ads` bucket is public-read anyway. Adding Auth means:
+  - populating `owner_id` on `brand_kits` and `campaigns`, and dropping the `owner_id is null` clause, so child tables follow automatically through their `exists` policies;
+  - changing `brand_kits.domain unique` to `unique (owner_id, domain)`, because two users may research the same store;
+  - making the bucket private and serving signed URLs.
+
+## M2: research (2026-10-27)
+
+**LLM provider: Anthropic directly, not the Vercel AI Gateway.** The brief recommends the gateway but allows any provider ("Any provider (Vercel AI Gateway recommended)").
+- **What happened on the gateway:**
+  - It first refused every call until the Vercel account had a card on file.
+  - With a card, its free tier still blocked every Claude model (Haiku 5.5, Sonnet 5, Sonnet 5.5, Opus 5) and the newer Gemini models. Only older models such as `openai/gpt-5-mini` responded.
+- **Why direct Anthropic:** we already have Anthropic credit. Calling it directly keeps Claude Sonnet 5.5, which was picked for tool use in the M3 agent, at no extra cost, instead of paying for gateway credits or downgrading the model.
+- **How it's wired:** all LLM calls go through `llm()` in `lib/llm.ts` (`@ai-sdk/anthropic`), with the model id in `LLM_MODEL` (default `claude-sonnet-5-5`). Moving back to the gateway is one line there plus a gateway id in `LLM_MODEL`.
+- **What we give up:** the gateway's single key for switching to other providers, and its usage dashboard.
+
+**Firecrawl scrapes are cached per domain.** Three research runs that failed later, at the LLM step, each spent a Firecrawl scrape.
+- **When it's saved:** a successful scrape (branding plus page markdown) is written to `brand_kits.raw.firecrawl` as soon as it returns, before anything else can fail.
+- **When it's reused:** for 7 days. Failed or skipped scrapes are never cached.
+- **Forcing a fresh scrape:** `npm run research -- <url> --fresh` scrapes again.
+- **Proof:** the free-tier failure above left a saved 30,715-character scrape behind.
+
+**Review of the first real run (2026-10-27), and what changed.**
+- **The picks are a mix, not the top 3 of one ranking.** The first run picked three 2025 best sellers and skipped the 11 new drops.
+  - **New rule:** one best seller, one of the newest, and one fresh seasonal product. Seasons come from Loopy's own "Fall Favorites" collection.
+  - **Holiday cutoff:** products themed on a holiday under 14 days away are skipped (five Halloween designs on Oct 27), because a campaign needs time to ramp.
+  - **Clearance last:** `last call` stock never leads, even on sale.
+  - **Goal rule:** seasonal if the seasonal pick is in play; sale only for a real, non-clearance discount; otherwise evergreen.
+  - **Result:** Cocoa Checkered (best seller), Raspberry Dots (newest), Night Sky (fall), goal seasonal.
+- **Short name for ads.** `short_name` ("Loopy") is derived in code from the exact store name ("Loopy®Cases"), which is kept for display. Both are editable in the review card.
+- **Near-duplicate claims are grouped** by a topic the LLM labels (warranty, returns, reviews…). M4 uses one claim per group per ad and spreads groups across a round.
+- **Fonts are left as Firecrawl reports them** (Roboto). The theme also loads Exo2, but the prompt asks for a bold rounded sans anyway.
+- **Claims vary between runs, and that's accepted.** The LLM picks different wordings each time, and the verbatim check makes every kept claim safe, not stable. Stability comes from the workflow instead: the brand kit the marketer confirms on the review card is saved and reused for every later generation, and research isn't rerun per ad.

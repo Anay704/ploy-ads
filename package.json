@@ -10,11 +10,15 @@
     "bakeoff": "tsx --env-file-if-exists=.env.local scripts/bakeoff.ts",
     "verify:m1": "tsx --conditions=react-server --env-file-if-exists=.env.local scripts/verify-m1.ts",
     "db:types": "supabase gen types typescript --local --schema public > lib/supabase/database.types.ts && oxfmt lib/supabase/database.types.ts",
-    "db:types:linked": "supabase gen types typescript --linked --schema public > lib/supabase/database.types.ts && oxfmt lib/supabase/database.types.ts"
+    "db:types:linked": "supabase gen types typescript --linked --schema public > lib/supabase/database.types.ts && oxfmt lib/supabase/database.types.ts",
+    "test": "tsx --conditions=react-server --test \"lib/**/*.test.ts\"",
+    "research": "tsx --conditions=react-server --env-file-if-exists=.env.local scripts/research.ts"
   },
   "dependencies": {
+    "@ai-sdk/anthropic": "^4.0.89",
     "@ai-sdk/react": "^4.0.158",
     "@fal-ai/client": "^1.10.1",
+    "@mendable/firecrawl-js": "^4.51.0",
     "@streamdown/cjk": "^1.0.4",
     "@streamdown/code": "^2.0.0",
     "@streamdown/math": "^1.0.3",

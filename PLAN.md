@@ -14,9 +14,14 @@ Versions checked on 2026-10-25: `ai@7.0.x`, `@ai-sdk/react@4.0.x`, `next@16.4`, 
 
 1. **Research (streaming).** The chat shows the `researchStore` tool running with live steps: "Reading catalog… 228 products", "Extracting brand…", "Picking products…". The right side shows skeletons.
 2. **Review card (the one pause).** One card appears in the chat and is mirrored large on the right. It contains:
-   - **Brand kit (editable):** logo (the pink wordmark), 3–5 color swatches, voice (3 adjectives and one sample line), value proposition, audience, and the approved claims list.
-   - **Products:** the 3 recommended products are preselected as tiles showing hero image, title, price and the reason for each pick. "Swap" opens a picker with the rest of the catalog.
-   - **Goal:** preselected from the data. *Sale* if a picked product has a real `compare_at_price`, *Launch* if one is tagged `new`, otherwise *Evergreen*. The other choices are a dropdown.
+   - **Brand kit (editable):** logo (the pink wordmark), the store name exactly as the site writes it ("Loopy®Cases") and the short name ads use ("Loopy"), 3–5 color swatches, voice (3 adjectives and one sample line), value proposition, audience, and the approved claims grouped by topic (warranty, returns, reviews…).
+   - **Products:** the 3 recommended products are preselected as tiles showing hero image, title, price and the reason for each pick. They're a mix: one best seller, one of the newest, one seasonal (§3). Products skipped for a too-close holiday are listed with the reason. "Swap" opens a picker with the rest of the catalog.
+   - **Goal:** preselected from the data:
+     - *Seasonal* if the seasonal pick is in play (its season is current, or its holiday is 14–60 days out).
+     - *Sale* if a pick has a real `compare_at_price` and isn't `last call` clearance.
+     - *Evergreen* otherwise.
+
+     *Launch* is no longer suggested, because the newest-product slot would make it fire every time. It's still in the dropdown with the other goals.
    - **Primary button:** **Generate 6 ads**. It is a single click, and edits are optional.
 3. **Generate (streaming).** The grid shows 6 tiles (3 products × 2 angles) in `generating` state. Each tile fills in as its ad finishes, in any order. The chat posts one line per completed ad.
 4. **Manage.** Each tile shows the ad at 9:16, the angle label, status, version count, and the actions approve, reject, edit copy, feedback, regenerate and download (download appears once approved). Opening a tile shows a detail drawer with version history (v1 → v2 → v3) and the feedback that produced each version.
@@ -35,7 +40,8 @@ app/
 lib/
   shopify.ts                    detect, fetch, slim, filter, rank
   brand.ts                      Firecrawl branding + homepage meta → LLM inference
-  copy.ts                       headline/CTA writer (generateObject, claims-constrained)
+  research.ts                   researchStore without the agent: runs both, saves rows, copies used images
+  copy.ts                       headline/CTA writer (generateText + Output.object, claims-constrained)
   generate.ts                   prompt builder → fal → post-process → Storage → DB
   prompt.ts                     prompt template + feedback injection
   supabase/{server,client}.ts
@@ -47,7 +53,7 @@ scripts/bakeoff.ts              model bake-off (M0)
 supabase/migrations/0001_init.sql
 ```
 
-**Where the agent runs.** It runs in `app/api/chat/route.ts` as a `streamText` call with `stopWhen: stepCountIs(8)`. The model is routed through the Vercel AI Gateway (`anthropic/claude-sonnet-5-5`, which is cheap and good at tool use). The system prompt carries the campaign ID and a compact brand kit summary. The route's `maxDuration` is set to 300 seconds.
+**Where the agent runs.** It runs in `app/api/chat/route.ts` as a `streamText` call with `stopWhen: stepCountIs(8)`. The model is Claude Sonnet 5.5 (`claude-sonnet-5-5`), which is cheap and good at tool use. Every LLM call gets its model from `lib/llm.ts`, which calls Anthropic directly through `@ai-sdk/anthropic`, with the id in `LLM_MODEL`. The brief recommends the Vercel AI Gateway but allows any provider. Its free tier blocks Claude models, so we use direct Anthropic credit instead (NOTES.md, M2). Moving back to the gateway is one line in `lib/llm.ts`. The system prompt carries the campaign ID and a compact brand kit summary. The route's `maxDuration` is set to 300 seconds.
 
 **Long-running generation.** `generateAds` does not wait for fal. It inserts `ad_variants` rows with status `generating`, starts the work with Next's `after()` (one promise per variant, run in parallel), and returns the IDs right away. Each job updates its own row. The grid subscribes to Supabase Realtime on `ad_variants` filtered by `campaign_id`, so tiles fill in as they finish no matter what the chat is doing.
 
@@ -85,10 +91,28 @@ Grid buttons call the same logic through server actions (`lib/generate.ts`) with
 - **URL normalization.** A `/products/<handle>` URL goes to `/products/<handle>.json`, and that product is pinned as pick #1. Any other URL is treated as the store root.
 - **Shopify detection.** `GET /meta.json` and `GET /products.json?limit=1` must both return JSON with the expected shape. Otherwise the tool returns `not_shopify`.
 - **Fetch and slim, server side.** The app pages through `/products.json?limit=250` until a page comes back empty, about 6.7 MB for Loopy. It keeps only the needed fields: `id, handle, title, product_type, tags(filtered), price, compare_at_price, available, description(text), images[{src, position, isHero}]`. The LLM never sees raw JSON. It sees at most 20 pre-ranked candidates as one-liners.
-- **Tag filter.** The tag list is an allowlist built at runtime. Internal tags are dropped by regex: `/^contains /i`, `/UNI$/`, `/^pf-/`, `testpromo`, and anything containing digits that looks like a device code.
-- **Ranking.** Only available products with type `cases` (or the store's dominant type) are considered. The order is `best seller` > `new` > `limited` > the rest, with `last call` pushed down. Ties break by having at least 3 hero images, then by recency. The first image is never taken blindly.
+- **Tag filter.** The tag list is an allowlist built at runtime. Internal tags are dropped by regex: `/^contains /i`, `/UNI$/`, `/^pf-/`, `/^pc-/`, `/^is-/`, `testpromo`, `LTE`, any `key:value` tag (`auto-select:off`), and device codes or screen sizes (`i13`, `S24`, `6.1`). Kept tags are lowercased. The rules come from Loopy's real 49 distinct tags and are covered by `lib/shopify.test.ts`.
+- **Ranking.** Only available products with type `cases` (or the store's dominant type) are considered. The base order is `best seller` > `new` > `limited` > the rest, with `last call` pushed down. Ties break by having at least 3 hero images, then by recency. This order feeds the agent's top-20 candidates and the Swap picker. The first image is never taken blindly.
+- **The 3 picks are a mix, not the top 3** (`pickMix`, decided after the first Loopy run, where the top 3 were all 2025 best sellers):
+  1. **Best seller:** the top `best seller` by the base order.
+  2. **Newest:** the most recently published product, preferring at least 3 hero images.
+  3. **Seasonal:** the freshest product in a collection named for the current season ("Fall Favorites"). Failing that, one in a collection or with a theme for a holiday 14–60 days out ("Holiday | Neutral Tones" for Christmas).
+- **Pick rules:**
+  - **Seasons come from the store's own collections** (`/collections.json`), because that's the merchant's merchandising, not a guess. Seasons go by month (northern hemisphere).
+  - **Too-close holidays are skipped everywhere.** A product whose title or tags are themed on a holiday under 14 days away is skipped from every slot (Halloween designs on 2026-10-27), because ads need time to ramp. Holidays are fixed-date only: Valentine's, St. Patrick's, Fourth of July, Halloween, Christmas. Keyword patterns are in `lib/seasons.ts`.
+  - **No clearance unless nothing else fits.** `last call` products only fill a slot when nothing else can, even if they're on sale.
+  - **Pinned first.** A pinned product (from a `/products/<handle>` URL) takes the first place.
+  - **No look-alikes.** A product that shares a title word with an earlier pick is passed over, so "Java Dots" doesn't follow "Raspberry Dots".
+  - **Reasons are saved.** Each pick's reason is saved as `products.rank_reason`, and the picks hold ranks 1–3.
+  - **Storage stays minimal.** Product photos copied for earlier picks are deleted on a rerun unless an ad uses them.
 - **Images.** "Hero" means an image with no `variant_ids`. These come first, and studio cutouts are the fallback. Every image is fetched as `src + ?width=1080&format=jpg`. Shopify's CDN ignores `format=jpg` for GIFs and returns the GIF (checked 2026-10-26), so `.gif` sources use `format=png`, which does flatten the first frame, and `sharp` re-encodes the result to JPEG. `width` never upscales: the GIF cutouts stay 720×960.
-- **Brand.** Firecrawl `scrape(url, { formats: ['branding'] })` supplies colors, fonts, logo and personality. The homepage `<title>`, meta description, JSON-LD `sameAs` and `/meta.json` supply the value proposition and claims. If Firecrawl finds no logo, the app uses the header `<img>` whose `src` contains `logo`, which is `logo_pink.png` for Loopy, and never the favicon. A `generateObject` call then produces `{ voice, valueProp, audience, claims[] }`, where `claims` must be substrings of scraped text and are validated in code.
+- **Brand.** Firecrawl `scrape(url, { formats: ['branding', 'markdown'] })` supplies colors, fonts, logo, personality and the page text. The homepage `<title>`, meta description, JSON-LD and `/meta.json` supply the value proposition and claims. They're always fetched, because they're where Shopify stores put their strongest claims.
+  - **Logo order:** Firecrawl's logo, then JSON-LD `Organization.logo`, then the first header `<img>` whose `src` contains `logo` (`logo_pink.png` for Loopy). Never the favicon or `og:image`, which for Loopy is a dark Shopify placeholder.
+  - **Without Firecrawl:** the key is missing or the call fails, so colors fall back to the logo's dominant color on white, and the review card lets the user fix them.
+  - **Model:** the LLM step uses `llm()` from `lib/llm.ts` (Claude Sonnet 5.5, called directly on Anthropic). A `generateText` call with `Output.object` then produces `{ voice, valueProp, audience, claims[] }`, where `claims` must be substrings of scraped text and are validated in code. The match ignores case, whitespace, curly quotes, word-joining hyphens, ®/™, markdown formatting, a trailing period and a leading article, and nothing else.
+  - **One fact per claim:** each claim is a short phrase (2–12 words) holding one fact, so the copy writer cites exactly the fact it uses.
+  - **Promotions are rejected even when verbatim:** prices, "% off", "buy X get Y", shipping thresholds and codes. They're time-limited, and offer copy may only use a real `compare_at_price` (§5).
+  - **Rejected claims** are kept with their reason (`not_verbatim`, `promotion`, `too_short`) in `brand_kits.raw` for debugging, never shown as claims.
 
 ---
 
@@ -106,8 +130,8 @@ create type feedback_scope as enum ('ad','campaign');
 
 | Table | Columns | Notes |
 |---|---|---|
-| `brand_kits` | `id uuid pk`, `owner_id uuid null` (auth later), `store_url`, `domain unique`, `name`, `logo_asset_id → assets`, `colors jsonb` (`{primary,secondary,accent,background,text}`), `fonts text[]`, `voice jsonb` (`{adjectives[], sample}`), `value_prop`, `audience`, `claims text[]`, `raw jsonb` (Firecrawl + meta, for debugging), `status brand_status`, `created_at` | Each domain is researched once, and a rerun refreshes it |
-| `products` | `id uuid pk`, `brand_kit_id → brand_kits`, `shopify_id bigint`, `handle`, `title`, `product_type`, `tags text[]` (filtered), `price numeric`, `compare_at_price numeric null`, `available bool` (ranking and the Swap picker only offer available products), `description`, `images jsonb` (`[{src,position,isHero}]`, URLs only), `rank int`, `rank_reason` | `unique(brand_kit_id, shopify_id)`. Images stay as CDN URLs until used |
+| `brand_kits` | `id uuid pk`, `owner_id uuid null` (auth later), `store_url`, `domain unique`, `name`, `logo_asset_id → assets`, `colors jsonb` (`{primary,secondary,accent,background,text}`), `fonts text[]`, `voice jsonb` (`{adjectives[], sample}`), `value_prop`, `audience`, `claims text[]`, `claim_groups jsonb` (`[{topic, claims[]}]`, migration 0002), `short_name` (what ads call the brand, migration 0002), `raw jsonb` (Firecrawl scrape cache + meta, for debugging), `status brand_status`, `created_at` | Each domain is researched once, and a rerun refreshes it |
+| `products` | `id uuid pk`, `brand_kit_id → brand_kits`, `shopify_id bigint`, `handle`, `title`, `product_type`, `tags text[]` (filtered), `price numeric`, `compare_at_price numeric null`, `available bool` (ranking and the Swap picker only offer available products), `description`, `images jsonb` (`[{id,src,position,isHero}]`, URLs only; `id` is Shopify's image id, used in the Storage path), `rank int`, `rank_reason` | `unique(brand_kit_id, shopify_id)`. Images stay as CDN URLs until used |
 | `campaigns` | `id uuid pk`, `brand_kit_id`, `owner_id null`, `name`, `goal campaign_goal`, `product_ids uuid[]`, `chat jsonb` (UIMessage[] for reload), `created_at` | |
 | `ads` | `id uuid pk`, `campaign_id`, `product_id`, `angle ad_angle`, `source_asset_id → assets` (the product photo used), `current_variant_id → ad_variants null`, `created_at` | An ad is a concept: one product × one angle |
 | `ad_variants` | `id uuid pk`, `ad_id`, `campaign_id` (denormalized for Realtime filtering), `parent_variant_id null`, `version int`, `headline`, `cta`, `prompt text` (exact prompt sent), `model`, `fal_request_id`, `asset_id → assets null`, `status variant_status`, `error`, `text_check jsonb null` (vision check result), `cost_usd numeric`, `created_at` | Each render is one row. Approval happens per variant |
@@ -179,7 +203,7 @@ Model parameters:
 
 **Prompt template (`lib/prompt.ts`).**
 ```
-Create a full-screen vertical 9:16 mobile ad (portrait interstitial) for {brand.name}.
+Create a full-screen vertical 9:16 mobile ad (portrait interstitial) for {brand.shortName}.
 
 PRODUCT — use the reference image exactly. The phone case "{product.title}" must keep its exact
 pattern, colors, finish, finger loop and camera cutout. Do not redraw, restyle or add products.
@@ -197,7 +221,14 @@ No other words, prices, logos or watermarks.
 {revisionNotes}   ← ad-level feedback for this ad's lineage, newest last
 ```
 
-**Copy.** `lib/copy.ts` calls `generateObject` with the brand kit, product and angle and returns `{ headline (≤6 words), cta (≤3 words), claimIds: number[] }`. Two guardrails are enforced in code:
+**Copy.** `lib/copy.ts` calls `generateText` with `output: Output.object(...)` (AI SDK 7 deprecates `generateObject`) with the brand kit, product and angle and returns `{ headline (≤6 words), cta (≤3 words), claimIds: number[] }`.
+
+**Claim groups.** Claims come grouped by topic (`brand_kits.claim_groups`), because sites repeat a promise in several wordings ("lifetime warranty", "Lifetime Loopy® Guarantee"). Copy generation:
+- cites at most one claim per group in an ad;
+- assigns groups across a round, so two ads in the same round don't lean on the same fact;
+- only reuses a group once every group has been used.
+
+Two guardrails are enforced in code:
 - Any number in the headline must appear verbatim in a cited claim.
 - `offer` copy may only quote `price` or `compare_at_price` exactly.
 
@@ -221,7 +252,7 @@ The result goes through the same post-processing, including the logo. If the edi
 5. Upload the final `.png`, create its `assets` row, and set the variant to `draft` with `ads.current_variant_id` pointing to it.
 6. On error, retry once with a fresh fal call. A variant gets at most one retry in total, whether the cause is a fal error or a failed text check, which keeps the worst case (2 × ~50s render + 2 checks) well inside the 300s budget. After that, mark the variant `failed` with the reason and show a Retry button on the tile.
 
-**Vision text check.** The bake-off showed Pro rendering the headline twice in 1 of 4 runs, and a marketer would never run that ad, so every render is checked before it can reach `draft`. The check runs on the `.raw.png`, before the logo is composited, so the real logo isn't counted as extra text. A cheap vision model through the AI Gateway (`anthropic/claude-haiku-5-5`) gets the image and returns `generateObject` output: `{ adText: string[], productText: string[], sceneText: string[] }`. That's every legible piece of text, split into overlaid ad copy, text printed on the product itself (the "loopy" loop emboss, the p mark) and legible words on props. The pass rule is enforced in code, not by the model:
+**Vision text check.** The bake-off showed Pro rendering the headline twice in 1 of 4 runs, and a marketer would never run that ad, so every render is checked before it can reach `draft`. The check runs on the `.raw.png`, before the logo is composited, so the real logo isn't counted as extra text. A cheap vision model (`llm('claude-haiku-5-5')`, Claude Haiku 5.5) gets the image and returns structured output (`generateText` + `Output.object`): `{ adText: string[], productText: string[], sceneText: string[] }`. That's every legible piece of text, split into overlaid ad copy, text printed on the product itself (the "loopy" loop emboss, the p mark) and legible words on props. The pass rule is enforced in code, not by the model:
 - `adText` contains the headline exactly once and the CTA exactly once, and nothing else. Comparison ignores case and collapses whitespace, because the model may style the CTA in caps, but letters and punctuation must match.
 - `sceneText` is empty. Illegible pseudo-lettering on props, as seen in the bake-off, isn't reported and doesn't fail.
 - `productText` is ignored, because it belongs to the real product.

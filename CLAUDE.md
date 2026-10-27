@@ -17,7 +17,7 @@ AI ads manager slice for the Ploy take-home: a Shopify store URL goes in, and 9:
 
 ## Stack (fixed by the brief)
 
-Next.js App Router + React + Tailwind · Vercel AI SDK v7 + AI Elements · Supabase (Postgres, Storage, Realtime; single demo user, no Auth) · fal.ai for images · Firecrawl `branding` for brand research · LLM via Vercel AI Gateway · Vercel hosting.
+Next.js App Router + React + Tailwind · Vercel AI SDK v7 + AI Elements · Supabase (Postgres, Storage, Realtime; single demo user, no Auth) · fal.ai for images · Firecrawl `branding` for brand research · any LLM provider (the brief recommends the Vercel AI Gateway; we call Anthropic directly via `lib/llm.ts`, see NOTES.md) · Vercel hosting.
 
 ## Invariants
 
