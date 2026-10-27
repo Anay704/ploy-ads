@@ -39,3 +39,13 @@ Each render was compared at full size against its source photo. The logo zone wa
 - **Pro returns 1536×2752**, slightly taller than 9:16. The post-process crops about 21px of height before resizing to 1080×1920.
 - **Bake-off colors are stand-ins.** The palette (`#F88A8A`, `#8FE8B3`) is the most-used colors in the site's CSS, standing in until M2's brand kit.
 - **Props carry pseudo-text.** Both Nano Banana models drew illegible pseudo-lettering on props such as cosmetics labels and a notebook. The text check ignores illegible marks and fails only on legible extra words.
+
+**Reviewer observations (Anay, from bakeoff.html).**
+- **Pro run 1 on Black Bows is the best ad of the set.** The bow pattern, the charcoal loop and the small "p" mark on the case all match the source, and it reads as a real lifestyle photo, not a template. This is the bar M4 renders are held to.
+- **Pro run 2 fails on more than text.** Beyond the doubled headline, the whole layout is a stock template with color bands, and it would feel cheap even with the text fixed. The text check catches the doubled headline. It does not catch template-looking layouts, so that stays a prompt problem (below).
+- **Seedream run 2 on Black Bows looks like the photo was pasted onto a sticker collage.** A marketer would not run it. This backs the tie-break: Seedream's fidelity came from pasting, not compositing.
+- **The scenes are repetitive.** Almost every render is the same pink and mint flat-lay with lipsticks and makeup brushes, and a round of 6 like that would feel like one ad six times. Two causes are in the bake-off's own setup:
+  - All 12 renders used the `aesthetic` angle, so every prompt carried the same scene line.
+  - The prompt's `Palette:` line sits inside SCENE, which reads as "make the scene pink and mint".
+
+  M4 gives each angle a clearly different scene direction and limits the palette to text, button and accents (PLAN.md §5, "Scene variety").
