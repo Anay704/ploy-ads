@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { copyProblem, sentenceCaseProblem } from './copy';
+import { copyProblem, restoreNames, sentenceCaseProblem } from './copy';
 
 const product: { title: string; price: number; compareAtPrice: number | null; description: string } = { title: 'Night Sky', price: 42.99, compareAtPrice: null, description: '' };
 const claims = ['70,000+ five star reviews', 'over 93% of people in-the-Loop would recommend Loopy to a friend'];
@@ -50,4 +50,10 @@ test('headlines are sentence case, but names keep their capitals', () => {
   assert.equal(sentenceCaseProblem('Try Loopy risk-free for 30 days', allowed), null);
   assert.equal(sentenceCaseProblem('Night Sky: Stargazing every season', ['Night Sky']), null);
   assert.match(sentenceCaseProblem('Grip Like You Mean It', [])!, /"Like"/);
+});
+
+test('product and brand names keep their capitals under sentence case', () => {
+  assert.equal(restoreNames('Love the raspberry dots? Return risk-free.', ['Raspberry Dots', 'Loopy']), 'Love the Raspberry Dots? Return risk-free.');
+  assert.equal(restoreNames('try loopy for 30 days', ['Raspberry Dots', 'Loopy']), 'try Loopy for 30 days');
+  assert.equal(restoreNames('Golden stars for every season', ['Night Sky']), 'Golden stars for every season');
 });

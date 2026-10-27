@@ -44,6 +44,20 @@ export function sentenceCaseProblem(headline: string, allowed: string[]): string
   return null;
 }
 
+/**
+ * Sentence case must not lowercase names: "Love the raspberry dots?" becomes "Love the
+ * Raspberry Dots?". Names are restored exactly as the store writes them (seen live in the QA
+ * pass), which is deterministic and costs no extra LLM call.
+ */
+export function restoreNames(headline: string, names: string[]): string {
+  let out = headline;
+  for (const name of names.filter((n) => n && /[A-Z]/.test(n))) {
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    out = out.replace(new RegExp(`\\b${escaped}\\b`, 'gi'), name);
+  }
+  return out;
+}
+
 export function copyProblem(
   copy: Copy,
   input: Pick<CopyInput, 'angle' | 'claims' | 'product'> & { brandName?: string; sentenceCase?: boolean },
@@ -143,7 +157,8 @@ async function draftCandidates(input: CopyInput, problem?: string) {
       .join('\n\n'),
   });
   const clean = (t: string) => t.trim().replace(/^"|"$/g, '');
-  return output.candidates.map((c) => ({ headline: clean(c.headline), cta: clean(output.cta), citedClaim: c.citedClaim }));
+  const names = [input.product.title, input.brandName];
+  return output.candidates.map((c) => ({ headline: restoreNames(clean(c.headline), names), cta: clean(output.cta), citedClaim: c.citedClaim }));
 }
 
 const Pick = z.object({
