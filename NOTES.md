@@ -84,3 +84,28 @@ Each render was compared at full size against its source photo. The logo zone wa
 - **Near-duplicate claims are grouped** by a topic the LLM labels (warranty, returns, reviews…). M4 uses one claim per group per ad and spreads groups across a round.
 - **Fonts are left as Firecrawl reports them** (Roboto). The theme also loads Exo2, but the prompt asks for a bold rounded sans anyway.
 - **Claims vary between runs, and that's accepted.** The LLM picks different wordings each time, and the verbatim check makes every kept claim safe, not stable. Stability comes from the workflow instead: the brand kit the marketer confirms on the review card is saved and reused for every later generation, and research isn't rerun per ad.
+
+## M3: agent and review card (2026-10-27)
+
+- **The campaign row is created when research starts, not on Generate.** PLAN first had `confirmBrief` create it. But the chat has to be saved somewhere while research streams, or a reload mid-research loses everything. Migration 0003 adds `campaigns.status` (`briefing` → `active`) and `source_url`, and makes `goal` nullable until the brief is confirmed. A check constraint keeps an active campaign from missing its goal or products.
+- **The database decides what the brief is, not the model.**
+  - **Minimal tool input:** `confirmBrief`'s input is only `{ brandKitId, productIds, goal }`. The review card loads the brand kit and products itself, so the model can't change a claim, price or color by restating it.
+  - **Claims can't be invented in the card:** the marketer can remove claims but not type new ones. The server action rejects any claim not in the verified list, which keeps the "claims verbatim from the site" invariant through the human step.
+  - **Approvals are checked:** the chat route refuses (409) a client message that claims an approval while the campaign isn't `active`. A tampered client can't skip the pause.
+- **Chat persistence.**
+  - **What travels:** the client sends only its newest message. The server holds the conversation in `campaigns.chat`.
+  - **Tool outputs replace by ID:** a tool output arrives as an update to the last assistant message, not a new message, so the server replaces by message ID instead of appending.
+  - **When it's saved:** the chat is saved before streaming, so a reload mid-research doesn't start research twice, and again in `onEnd`. `consumeStream()` lets research finish and save even if the tab closes.
+- **Research progress is preliminary tool results.** `researchStore.execute` is an async generator. Each progress event from `research()` is yielded, and the UI renders the latest as a live checklist. Only the final yield (a compact summary and the 20 one-line candidates) goes to the model.
+- **The auto-start needed a React-specific fix.** React's development double-mount sent the first message from a chat instance that was then discarded, and a ref guard blocked the surviving one, so research never started. The send is now scheduled in the effect and cleared in its cleanup, so exactly one mount sends it.
+- **Bugs found by running it in the browser, all fixed:**
+  - **Swapped photos failed to copy:** `ensureProductImage` treated "no existing asset" as an error, so every first-time copy failed.
+  - **Errors were hidden:** tool errors showed only the SDK's generic "An error occurred." Ours are now shown.
+  - **Wrong font:** shadcn's init wrote a self-referencing `--font-sans`, so the app fell back to a serif.
+  - **Slow reload:** a reload took a few seconds to show the brief, so the page now loads it on the server.
+- **Design.**
+  - **Brand colors throughout:** the workspace takes the brand's colors as CSS variables once research is done, and button text is picked for contrast (Loopy's pink needs dark text, not white).
+  - **Loading never shows a blank screen:** research shows a live checklist over skeletons shaped like the card.
+  - **Sale can't be chosen falsely:** it's disabled when no product has a real, non-clearance discount, because there would be nothing true to put on sale.
+  - **Screenshots:** in `docs/screenshots/m3-*.jpg`.
+- **Testing used the local Supabase stack.** Pushing migration 0003 to the hosted project was blocked by the session's permission rules, so `npm run dev:local` points the app at the local stack (`scripts/dev-local.sh`). The hosted project needs `npx supabase db push` before `npm run dev` works against it.

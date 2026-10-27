@@ -185,7 +185,7 @@ export function imageFetchUrl(src: string): string {
  * come first, still images before GIFs; studio cutouts are the fallback. Position 1 is never
  * taken blindly, because some stores put an animated GIF or a promo graphic there.
  */
-export function pickSourceImage(p: SlimProduct): ShopifyImage | null {
+export function pickSourceImage(p: Pick<SlimProduct, 'images'>): ShopifyImage | null {
   const isGif = (i: ShopifyImage) => /\.gif$/i.test(i.src);
   const order = [
     ...p.images.filter((i) => i.isHero && !isGif(i)),
@@ -287,9 +287,9 @@ export async function fetchSeasonalCollections(origin: string): Promise<Seasonal
 
 export type Slot = 'pinned' | 'best_seller' | 'newest' | 'seasonal' | 'next_best';
 
-export type Pick = RankedProduct & { slot: Slot; pickReason: string; seasonal?: { season?: Season; holiday?: Holiday } };
+export type ProductPick = RankedProduct & { slot: Slot; pickReason: string; seasonal?: { season?: Season; holiday?: Holiday } };
 
-export type PickResult = { picks: Pick[]; ordered: RankedProduct[]; skipped: { title: string; reason: string }[] };
+export type PickResult = { picks: ProductPick[]; ordered: RankedProduct[]; skipped: { title: string; reason: string }[] };
 
 const isClearance = (p: SlimProduct) => p.tags.includes('last call');
 const themeOf = (p: SlimProduct) => holidaysIn(`${p.title} ${p.tags.join(' ')}`);
@@ -331,8 +331,8 @@ export function pickMix(
   });
   const fresh = eligible.filter((p) => !isClearance(p));
 
-  const picks: Pick[] = [];
-  const take = (cands: RankedProduct[], slot: Slot, reason: (p: RankedProduct) => string, seasonal?: (p: RankedProduct) => Pick['seasonal']) => {
+  const picks: ProductPick[] = [];
+  const take = (cands: RankedProduct[], slot: Slot, reason: (p: RankedProduct) => string, seasonal?: (p: RankedProduct) => ProductPick['seasonal']) => {
     if (picks.length >= 3) return;
     const p = cands.find((c) => !picks.some((x) => x.shopifyId === c.shopifyId || looksAlike(x, c)));
     if (p) picks.push({ ...p, slot, pickReason: reason(p), seasonal: seasonal?.(p) });
@@ -390,7 +390,7 @@ export function pickMix(
   const ordered = [...picks, ...ranked.filter((p) => !pickIds.has(p.shopifyId))].map((p, i) => ({
     ...p,
     rank: i + 1,
-    rankReason: 'pickReason' in p ? (p as Pick).pickReason : p.rankReason,
+    rankReason: 'pickReason' in p ? (p as ProductPick).pickReason : p.rankReason,
   }));
   return { picks: picks.map((p, i) => ({ ...p, rank: i + 1, rankReason: p.pickReason })), ordered, skipped };
 }
@@ -399,7 +399,7 @@ export function pickMix(
  * Seasonal if a seasonal pick is in play (its season is current or its holiday is in window),
  * Sale only if a pick has a real discount and isn't clearance, otherwise Evergreen.
  */
-export function suggestGoal(picks: Pick[]): Goal {
+export function suggestGoal(picks: ProductPick[]): Goal {
   if (picks.some((p) => p.slot === 'seasonal' && p.seasonal)) return 'seasonal';
   if (picks.some((p) => p.compareAtPrice !== null && !isClearance(p))) return 'sale';
   return 'evergreen';

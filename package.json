@@ -12,7 +12,8 @@
     "db:types": "supabase gen types typescript --local --schema public > lib/supabase/database.types.ts && oxfmt lib/supabase/database.types.ts",
     "db:types:linked": "supabase gen types typescript --linked --schema public > lib/supabase/database.types.ts && oxfmt lib/supabase/database.types.ts",
     "test": "tsx --conditions=react-server --test \"lib/**/*.test.ts\"",
-    "research": "tsx --conditions=react-server --env-file-if-exists=.env.local scripts/research.ts"
+    "research": "tsx --conditions=react-server --env-file-if-exists=.env.local scripts/research.ts",
+    "dev:local": "bash scripts/dev-local.sh"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^4.0.89",

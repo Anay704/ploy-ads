@@ -9,7 +9,9 @@ async function main() {
   const url = process.argv.slice(2).find((a) => !a.startsWith('--'));
   if (!url) throw new Error('usage: npm run research -- <store or product URL>');
   const t0 = Date.now();
-  const result = await research(url, (step) => console.log(`… ${step}`), { freshScrape: process.argv.includes('--fresh') });
+  const result = await research(url, (step) => console.log(`${step.status === 'done' ? '✓' : '…'} ${step.label}`), {
+    freshScrape: process.argv.includes('--fresh'),
+  });
 
   if ('error' in result) {
     console.log(`\n${result.error}: ${result.url}`);

@@ -20,6 +20,7 @@ import {
   suggestGoal,
   type Goal,
   type RankedProduct,
+  type SlimProduct,
   type Slot,
 } from './shopify';
 
@@ -48,7 +49,9 @@ export type ResearchResult =
       candidates: string[]; // top 20 as one-liners: what the agent will see, never raw JSON
     };
 
-export type Progress = (step: string) => void;
+/** One line of the research checklist. Each key goes active, then done (possibly with a new label). */
+export type ProgressStep = { key: 'shopify' | 'catalog' | 'brand' | 'picks' | 'photos'; label: string; status: 'active' | 'done' };
+export type Progress = (step: ProgressStep) => void;
 
 export async function research(
   input: string,
@@ -56,9 +59,10 @@ export async function research(
   opts: { freshScrape?: boolean; today?: Date } = {},
 ): Promise<ResearchResult> {
   const target = parseStoreUrl(input);
-  onProgress(`Checking ${target.domain} for a Shopify catalog…`);
+  onProgress({ key: 'shopify', label: `Checking ${target.domain} for a Shopify catalog`, status: 'active' });
   const shop = await detectShopify(target.origin);
   if (!shop) return { error: 'not_shopify', url: input };
+  onProgress({ key: 'shopify', label: `${shop.meta.name} runs on Shopify`, status: 'done' });
 
   const db = supabaseServer();
   const kit = must(
@@ -72,30 +76,34 @@ export async function research(
 
   // Catalog and brand research are independent, so they run in parallel.
   const catalogP = (async () => {
+    onProgress({ key: 'catalog', label: 'Reading the catalog', status: 'active' });
     const raw = await fetchCatalog(shop.origin);
     if (target.productHandle && !raw.some((p) => p.handle === target.productHandle)) {
       const pinned = await fetchProduct(shop.origin, target.productHandle);
       if (pinned) raw.push(pinned);
     }
-    onProgress(`Reading catalog… ${raw.length} products`);
+    onProgress({ key: 'catalog', label: `Read the catalog: ${raw.length} products`, status: 'done' });
     return raw.map(slimProduct);
   })();
   const prevRaw = (kit.raw ?? {}) as Record<string, unknown>;
   const brandP = (async () => {
-    onProgress('Extracting brand…');
-    return researchBrand(shop.origin, shop.meta, {
+    onProgress({ key: 'brand', label: 'Extracting brand: logo, colors, voice, claims', status: 'active' });
+    const drafted = await researchBrand(shop.origin, shop.meta, {
       cachedFirecrawl: opts.freshScrape ? undefined : prevRaw.firecrawl,
       // Saved straight away, so a failure later in research doesn't throw the credits away.
       onFirecrawl: async (firecrawl) => {
         must(await db.from('brand_kits').update({ raw: { ...prevRaw, firecrawl } as Json }).eq('id', kit.id).select('id'), 'cache firecrawl');
       },
     });
+    onProgress({ key: 'brand', label: `Brand kit drafted: ${drafted.claims.length} verified claims`, status: 'done' });
+    return drafted;
   })();
   const [products, brand, collections] = await Promise.all([catalogP, brandP, fetchSeasonalCollections(shop.origin)]);
 
-  onProgress('Picking products…');
+  onProgress({ key: 'picks', label: 'Picking a best seller, a new drop and a seasonal product', status: 'active' });
   const { picks, ordered, skipped } = pickMix(products, { today: opts.today ?? new Date(), collections, pinnedHandle: target.productHandle });
   const rankById = new Map(ordered.map((r) => [r.shopifyId, r]));
+  onProgress({ key: 'picks', label: `Picked ${picks.map((p) => p.title).join(', ')}`, status: 'done' });
 
   // Every slimmed product is stored so the review card's Swap picker can offer the rest.
   const rows = products.map((p) => {
@@ -125,9 +133,11 @@ export async function research(
     for (const row of chunk) saved.set(row.shopify_id, row.id);
   }
 
+  onProgress({ key: 'photos', label: 'Saving the logo and product photos', status: 'active' });
   const logoAssetId = brand.logoUrl ? await copyLogo(db, kit.id, brand.logoUrl) : null;
   const recommended = await Promise.all(picks.map((p) => copyPick(db, kit.id, saved.get(p.shopifyId)!, p, p.slot)));
   await removeUnusedProductImages(db, kit.id, new Set(recommended.map((r) => r.imageAssetId)));
+  onProgress({ key: 'photos', label: `Saved the logo and ${recommended.length} product photos`, status: 'done' });
 
   const { raw, ...brandKit } = brand;
   must(
@@ -136,7 +146,7 @@ export async function research(
       .update({
         name: brand.name,
         short_name: brand.shortName,
-        claim_groups: brand.claimGroups as Json,
+        claim_groups: brand.claimGroups as unknown as NonNullable<Json>,
         logo_asset_id: logoAssetId,
         colors: brand.colors,
         fonts: brand.fonts,
@@ -201,7 +211,7 @@ async function saveAsset(
  * A rerun can change the picks. Product photos copied for earlier picks are deleted unless
  * they are current picks or an ad already uses them, so Storage only holds images in use.
  */
-async function removeUnusedProductImages(db: Db, brandKitId: string, keep: Set<string>) {
+export async function removeUnusedProductImages(db: Db, brandKitId: string, keep: Set<string>) {
   const assets = must(await db.from('assets').select('id, storage_path').eq('brand_kit_id', brandKitId).eq('kind', 'product_image'), 'list product images');
   const used = must(await db.from('ads').select('source_asset_id').in('source_asset_id', assets.map((a) => a.id)), 'find used images');
   const usedIds = new Set(used.map((u) => u.source_asset_id));
@@ -222,14 +232,32 @@ async function copyLogo(db: Db, brandKitId: string, logoUrl: string): Promise<st
   }
 }
 
-async function copyPick(db: Db, brandKitId: string, productId: string, p: RankedProduct, slot: Slot): Promise<Recommended> {
-  const img = pickSourceImage(p);
-  if (!img) throw new Error(`${p.title} has no images`);
+/**
+ * Copies a product's ad photo into Storage, or returns the asset already there. Used for the
+ * research picks and for a product swapped in on the review card.
+ */
+export async function ensureProductImage(
+  db: Db,
+  brandKitId: string,
+  productId: string,
+  product: Pick<SlimProduct, 'images' | 'title'>,
+): Promise<{ assetId: string; path: string }> {
+  const img = pickSourceImage(product);
+  if (!img) throw new Error(`${product.title} has no images`);
+  const path = `brands/${brandKitId}/products/${productId}/${img.id}.jpg`;
+  // maybeSingle: no row is the normal first-time case, so this doesn't go through must().
+  const { data: existing, error } = await db.from('assets').select('id').eq('storage_path', path).maybeSingle();
+  if (error) throw new Error(`find product image: ${error.message}`);
+  if (existing) return { assetId: existing.id, path };
   const url = imageFetchUrl(img.src);
   // Re-encode to JPEG whatever the CDN sends (it returns PNG for GIF sources).
   const jpg = await sharp(await download(url)).flatten({ background: '#ffffff' }).jpeg({ quality: 90 }).toBuffer();
-  const path = `brands/${brandKitId}/products/${productId}/${img.id}.jpg`;
-  const imageAssetId = await saveAsset(db, { brandKitId, kind: 'product_image', path, sourceUrl: url, body: jpg, mime: 'image/jpeg' });
+  const assetId = await saveAsset(db, { brandKitId, kind: 'product_image', path, sourceUrl: url, body: jpg, mime: 'image/jpeg' });
+  return { assetId, path };
+}
+
+async function copyPick(db: Db, brandKitId: string, productId: string, p: RankedProduct, slot: Slot): Promise<Recommended> {
+  const { assetId: imageAssetId, path } = await ensureProductImage(db, brandKitId, productId, p);
   return {
     productId,
     title: p.title,
@@ -243,7 +271,7 @@ async function copyPick(db: Db, brandKitId: string, productId: string, p: Ranked
   };
 }
 
-function must<R extends { data: unknown; error: { message: string } | null }>(res: R, what: string): NonNullable<R['data']> {
+export function must<R extends { data: unknown; error: { message: string } | null }>(res: R, what: string): NonNullable<R['data']> {
   if (res.error || res.data === null) throw new Error(`${what}: ${res.error?.message ?? 'no data'}`);
   return res.data as NonNullable<R['data']>;
 }
