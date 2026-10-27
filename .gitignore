@@ -1,0 +1,6 @@
+node_modules/
+.env.local
+.env*.local
+# Full-size bake-off renders are large; thumbnails, sources, results.json and scores.json are kept.
+bakeoff/out/
+.DS_Store

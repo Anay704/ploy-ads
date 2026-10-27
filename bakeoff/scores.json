@@ -1,0 +1,22 @@
+{
+  "rubric": "0-2 each. Fidelity vs the source photo (pattern, loop, camera cutout) is the gate. Text = headline and CTA spelled exactly, once, with no other words. Layout = 9:16 and the headline below the top-12% logo zone (2 clear, 1 crosses the line, 0 headline mostly inside the zone or the layout is broken). Latency and cost are scored per model.",
+  "models": {
+    "nb21": { "latency": 2, "cost": 1, "notes": "23-26s with 12 jobs in parallel. 1536x2752 output (0.558, needs a ~21px crop to 9:16)." },
+    "nbpro": { "latency": 1, "cost": 0, "notes": "26-49s, the variance is queueing. Same 1536x2752 output." },
+    "sd5": { "latency": 0, "cost": 2, "notes": "44-52s. Exact 1440x2560." }
+  },
+  "outputs": {
+    "nb21_A_1": { "fidelity": 1, "text": 2, "layout": 2, "notes": "Loop recolored from charcoal to grey, and the hand was reposed with a finger through the loop, so the 'keep the hand and loop interaction' instruction was ignored. Bows pattern and camera are right. The top 12% is a flat pink band." },
+    "nb21_A_2": { "fidelity": 2, "text": 2, "layout": 1, "notes": "Pattern, charcoal loop, p logo and camera all match. The hand is reposed (the loop is not in use, as in the source). The headline crosses the 12% line. Blurred pseudo-lettering on the notebook prop." },
+    "nbpro_A_1": { "fidelity": 2, "text": 2, "layout": 2, "notes": "Best of the A row: the pattern matches bow for bow, the loop text orientation matches the source, and the hand is close to the original. Headline is clear of the logo zone. Tiny illegible labels on the cosmetics props." },
+    "nbpro_A_2": { "fidelity": 2, "text": 0, "layout": 0, "notes": "Product is faithful, but the headline is rendered TWICE (above and below the photo) in a banded, template-like layout with an empty white strip on top. A hard text failure." },
+    "sd5_A_1": { "fidelity": 2, "text": 2, "layout": 0, "notes": "Product is essentially the source photo, kept intact with slight oversharpening. The headline is a serif rather than the requested rounded sans, and its first line sits entirely inside the logo zone." },
+    "sd5_A_2": { "fidelity": 2, "text": 2, "layout": 1, "notes": "Fidelity is 2 only because it pasted the source photo in as a framed picture with stickers: a collage, not a scene, and visibly soft and upscaled next to the crisp text. The headline crosses the 12% line." },
+    "nb21_B_1": { "fidelity": 1, "text": 2, "layout": 2, "notes": "Finish drifted: the pink-to-lilac-to-blue vertical gradient became a rainbow sheen with mint and yellow, the studded lens bezels became flat grey rings, and the loop is shorter. Clean layout." },
+    "nb21_B_2": { "fidelity": 2, "text": 2, "layout": 1, "notes": "Gradient, studded bezels, loop and p mark all match. The loop is shown raised, which is plausible. The phone is fairly small in frame, and the headline just crosses the 12% line." },
+    "nbpro_B_1": { "fidelity": 2, "text": 2, "layout": 2, "notes": "Faithful gradient, bezels, loop and p mark. Headline cap height sits right at the 12% line. The phone sits in a boxed photo panel, which is fine." },
+    "nbpro_B_2": { "fidelity": 2, "text": 2, "layout": 1, "notes": "Faithful product, strongest B scene (satin, pearls). The headline starts above the 12% line." },
+    "sd5_B_1": { "fidelity": 2, "text": 2, "layout": 1, "notes": "Gradient, bezels and loop match. It added bottom-edge port cutouts the source does not show (plausible for the real case, but invented geometry). The headline wraps differently and crosses the 12% line." },
+    "sd5_B_2": { "fidelity": 2, "text": 2, "layout": 0, "notes": "Product is the cutout, near untouched. Spelled exactly, but the headline is a hollow outline in white-on-white, nearly invisible, and it sits in the logo zone." }
+  }
+}

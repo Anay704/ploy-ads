@@ -1,0 +1,284 @@
+# PLAN: AI Ads Manager slice
+
+From a store URL to 9:16 interstitial ads a marketer would actually run. The agent does the work, and the user steers at two points: one review card before generation, and feedback after it.
+
+Versions checked on 2026-10-25: `ai@7.0.x`, `@ai-sdk/react@4.0.x`, `next@16.4`, `@fal-ai/client@1.10`, `@supabase/supabase-js@2.118`, `@mendable/firecrawl-js@4.51`.
+
+---
+
+## 1. Marketer flow, screen by screen
+
+**Screen 1: Start (`/`).** There is one input: "Paste your store or product URL". On submit, the app creates a `brand_kits` row in `researching` state and routes to the workspace. A store that isn't Shopify gets an inline message: *"We currently support Shopify stores. This one doesn't expose a Shopify catalog."* No workspace is created.
+
+**Screen 2: Workspace (`/c/[campaignId]`).** This is the only screen after start. Chat sits on the left (about 400px) and the campaign workspace on the right.
+
+1. **Research (streaming).** The chat shows the `researchStore` tool running with live steps: "Reading catalog… 228 products", "Extracting brand…", "Picking products…". The right side shows skeletons.
+2. **Review card (the one pause).** One card appears in the chat and is mirrored large on the right. It contains:
+   - **Brand kit (editable):** logo (the pink wordmark), 3–5 color swatches, voice (3 adjectives and one sample line), value proposition, audience, and the approved claims list.
+   - **Products:** the 3 recommended products are preselected as tiles showing hero image, title, price and the reason for each pick. "Swap" opens a picker with the rest of the catalog.
+   - **Goal:** preselected from the data. *Sale* if a picked product has a real `compare_at_price`, *Launch* if one is tagged `new`, otherwise *Evergreen*. The other choices are a dropdown.
+   - **Primary button:** **Generate 6 ads**. It is a single click, and edits are optional.
+3. **Generate (streaming).** The grid shows 6 tiles (3 products × 2 angles) in `generating` state. Each tile fills in as its ad finishes, in any order. The chat posts one line per completed ad.
+4. **Manage.** Each tile shows the ad at 9:16, the angle label, status, version count, and the actions approve, reject, edit copy, feedback, regenerate and download (download appears once approved). Opening a tile shows a detail drawer with version history (v1 → v2 → v3) and the feedback that produced each version.
+5. **Steer from chat.** The user can type requests such as "make the bows one warmer", "never use dark backgrounds", "add 2 more angles" or "try Lavender Pearl too". The agent calls the right tool, and the grid updates. The grid is the source of truth; chat only reports what happened.
+
+---
+
+## 2. Architecture
+
+```
+app/
+  page.tsx                      start screen (URL form → server action startResearch)
+  c/[campaignId]/page.tsx       workspace: <ChatPanel/> + <Workspace/>
+  api/chat/route.ts             agent: streamText + tools, maxDuration 300
+  actions.ts                    server actions: confirmBrief, setStatus, editCopy, regenerate, addFeedback
+lib/
+  shopify.ts                    detect, fetch, slim, filter, rank
+  brand.ts                      Firecrawl branding + homepage meta → LLM inference
+  copy.ts                       headline/CTA writer (generateObject, claims-constrained)
+  generate.ts                   prompt builder → fal → post-process → Storage → DB
+  prompt.ts                     prompt template + feedback injection
+  supabase/{server,client}.ts
+  tools.ts                      AI SDK tool definitions
+components/
+  ai-elements/*                 copied in via the AI Elements CLI (shadcn registry)
+  review-card.tsx, ad-grid.tsx, ad-tile.tsx, ad-drawer.tsx
+scripts/bakeoff.ts              model bake-off (M0)
+supabase/migrations/0001_init.sql
+```
+
+**Where the agent runs.** It runs in `app/api/chat/route.ts` as a `streamText` call with `stopWhen: stepCountIs(8)`. The model is routed through the Vercel AI Gateway (`anthropic/claude-sonnet-5-5`, which is cheap and good at tool use). The system prompt carries the campaign ID and a compact brand kit summary. The route's `maxDuration` is set to 300 seconds.
+
+**Long-running generation.** `generateAds` does not wait for fal. It inserts `ad_variants` rows with status `generating`, starts the work with Next's `after()` (one promise per variant, run in parallel), and returns the IDs right away. Each job updates its own row. The grid subscribes to Supabase Realtime on `ad_variants` filtered by `campaign_id`, so tiles fill in as they finish no matter what the chat is doing.
+
+- **`after()` is bounded by the route's `maxDuration`.** Next's docs say `after` "will run for the platform's default or configured max duration of your route". On Vercel it runs through `waitUntil` in the same invocation, so the chat stream and the fal jobs share one 300s budget, which is also the Hobby maximum. That budget covers 6 parallel jobs of about 10–40s each. Server actions that start jobs (Retry, edit copy, regenerate) take the page's segment config, so `app/c/[campaignId]/page.tsx` also exports `maxDuration = 300`.
+- **Stuck-variant rule.** Any variant still `generating` 5 minutes after `created_at` is marked `failed` with `error = 'timeout'`, and the tile shows Retry. This is enforced in two places:
+  - In the workspace page's server load, with one `update … where status='generating' and created_at < now() - interval '5 minutes'`.
+  - On the grid, where a client timer checks each generating tile's age and calls the same `sweepStuck(campaignId)` server action.
+- **fal queue with webhook: not used.** The queue API with a webhook would be more reliable, because the job lives on fal's side and fal delivers the result to us whether or not our function survives. We don't use it because webhooks need a public URL (a tunnel in local dev), signature verification and an extra route. Instead we use `fal.queue.submit` and store `fal_request_id`, so before marking a variant timed out the sweep asks fal for its status and recovers a finished result.
+
+**Tools.** Each tool is defined with `tool({ description, inputSchema: z.object(...), execute })`. The pause tool `confirmBrief` has **no `execute`**: the client renders it and resolves it with `addToolOutput`. `useChat` uses `sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithToolCalls`, so the agent continues on its own once the user clicks Generate.
+
+**AI Elements used:** `Conversation`, `Message`, `PromptInput`, `Tool` (collapsible research and generation steps), `Task` (research checklist), `Shimmer`/`Loader`, `Suggestion` (chips such as "More angles", "Add a product", "Warmer tone"), and `Image`. AI Elements is scheduled for deprecation. The source is the banner at the top of [elements.ai-sdk.dev](https://elements.ai-sdk.dev/), checked 2026-10-25: "AI Elements is moving to shadcn/ui. This project will be deprecated at the end of November 2026." The components are copied into the repo as source, so this does not block the build. It belongs in the submission note.
+
+---
+
+## 3. Agent design
+
+| Tool | Input | Output | Side effects |
+|---|---|---|---|
+| `researchStore` | `{ url }` | `{ brandKitId, brandKit, recommended: Product[3], suggestedGoal, catalogCount }` or `{ error: "not_shopify" }` | Upserts `brand_kits` (status `draft`) and the slimmed `products` rows. Copies **only** the logo and the chosen hero image for each recommended product into Storage as `assets` |
+| `confirmBrief` **(pause)** | `{ brandKitId, brandKit, productIds, goal }`, filled by the agent from research | `{ approved: true, campaignId, brandKit, productIds, goal }`, as returned by the client | None from the agent. The client's Generate button calls the `confirmBrief` server action, which saves the brand kit edits, creates the `campaigns` row and copies any newly chosen product images, then calls `addToolOutput` |
+| `generateAds` | `{ campaignId, productIds?, angles?: Angle[], perProduct?: number }` | `{ variantIds, queued }` | Writes copy (`lib/copy.ts`), inserts `ads` and `ad_variants` (`generating`), and starts fal jobs in `after()` |
+| `reviseAd` | `{ adId, feedback?, headline?, cta? }` | `{ variantId }` | Inserts `feedback` (scope `ad`) and a child `ad_variants` row (`generating`, `parent_variant_id`), then starts the job |
+| `addBrandRule` | `{ campaignId, rule }` | `{ feedbackId, activeRules }` | Inserts `feedback` (scope `campaign`). Applies to all later generations and does not regenerate existing ads unless asked |
+| `setStatus` | `{ variantId, status: 'approved' \| 'rejected' }` | `{ ok }` | Updates `ad_variants.status` |
+| `listAds` | `{ campaignId }` | compact rows `{ adId, product, angle, version, status, headline }` | Read-only. Lets the agent resolve "the second one" and "the bows one" against the grid |
+
+Grid buttons call the same logic through server actions (`lib/generate.ts`) without going through the LLM, so approve and edit copy respond instantly.
+
+**The exact pause point.** After `researchStore` returns, the system prompt requires the agent's next call to be `confirmBrief`, and generation never starts before that tool has an output. It is the only blocking step. Everything after it is steering, not gating.
+
+**Angles** come from a fixed set, and the LLM picks 2 per product for round 1 based on the goal: `benefit` (StoptheDrop®, grip), `social_proof` (70,000+ five-star reviews, since 2012), `offer` (only if there is a real `compare_at_price`), `aesthetic` (the product's look and season), and `guarantee` (lifetime warranty).
+
+**Research details (`lib/shopify.ts`, `lib/brand.ts`):**
+- **URL normalization.** A `/products/<handle>` URL goes to `/products/<handle>.json`, and that product is pinned as pick #1. Any other URL is treated as the store root.
+- **Shopify detection.** `GET /meta.json` and `GET /products.json?limit=1` must both return JSON with the expected shape. Otherwise the tool returns `not_shopify`.
+- **Fetch and slim, server side.** The app pages through `/products.json?limit=250` until a page comes back empty, about 6.7 MB for Loopy. It keeps only the needed fields: `id, handle, title, product_type, tags(filtered), price, compare_at_price, available, description(text), images[{src, position, isHero}]`. The LLM never sees raw JSON. It sees at most 20 pre-ranked candidates as one-liners.
+- **Tag filter.** The tag list is an allowlist built at runtime. Internal tags are dropped by regex: `/^contains /i`, `/UNI$/`, `/^pf-/`, `testpromo`, and anything containing digits that looks like a device code.
+- **Ranking.** Only available products with type `cases` (or the store's dominant type) are considered. The order is `best seller` > `new` > `limited` > the rest, with `last call` pushed down. Ties break by having at least 3 hero images, then by recency. The first image is never taken blindly.
+- **Images.** "Hero" means an image with no `variant_ids`. These come first, and studio cutouts are the fallback. Every image is fetched as `src + ?width=1080&format=jpg`. Shopify's CDN ignores `format=jpg` for GIFs and returns the GIF (checked 2026-10-26), so `.gif` sources use `format=png`, which does flatten the first frame, and `sharp` re-encodes the result to JPEG. `width` never upscales: the GIF cutouts stay 720×960.
+- **Brand.** Firecrawl `scrape(url, { formats: ['branding'] })` supplies colors, fonts, logo and personality. The homepage `<title>`, meta description, JSON-LD `sameAs` and `/meta.json` supply the value proposition and claims. If Firecrawl finds no logo, the app uses the header `<img>` whose `src` contains `logo`, which is `logo_pink.png` for Loopy, and never the favicon. A `generateObject` call then produces `{ voice, valueProp, audience, claims[] }`, where `claims` must be substrings of scraped text and are validated in code.
+
+---
+
+## 4. Supabase schema
+
+Enums:
+```sql
+create type brand_status   as enum ('researching','draft','confirmed');
+create type campaign_goal  as enum ('sale','launch','evergreen','seasonal');
+create type ad_angle       as enum ('benefit','social_proof','offer','aesthetic','guarantee');
+create type variant_status as enum ('generating','draft','approved','rejected','failed');
+create type asset_kind     as enum ('logo','product_image','ad_render','ad_raw');
+create type feedback_scope as enum ('ad','campaign');
+```
+
+| Table | Columns | Notes |
+|---|---|---|
+| `brand_kits` | `id uuid pk`, `owner_id uuid null` (auth later), `store_url`, `domain unique`, `name`, `logo_asset_id → assets`, `colors jsonb` (`{primary,secondary,accent,background,text}`), `fonts text[]`, `voice jsonb` (`{adjectives[], sample}`), `value_prop`, `audience`, `claims text[]`, `raw jsonb` (Firecrawl + meta, for debugging), `status brand_status`, `created_at` | Each domain is researched once, and a rerun refreshes it |
+| `products` | `id uuid pk`, `brand_kit_id → brand_kits`, `shopify_id bigint`, `handle`, `title`, `product_type`, `tags text[]` (filtered), `price numeric`, `compare_at_price numeric null`, `description`, `images jsonb` (`[{src,position,isHero}]`, URLs only), `rank int`, `rank_reason` | `unique(brand_kit_id, shopify_id)`. Images stay as CDN URLs until used |
+| `campaigns` | `id uuid pk`, `brand_kit_id`, `owner_id null`, `name`, `goal campaign_goal`, `product_ids uuid[]`, `chat jsonb` (UIMessage[] for reload), `created_at` | |
+| `ads` | `id uuid pk`, `campaign_id`, `product_id`, `angle ad_angle`, `source_asset_id → assets` (the product photo used), `current_variant_id → ad_variants null`, `created_at` | An ad is a concept: one product × one angle |
+| `ad_variants` | `id uuid pk`, `ad_id`, `campaign_id` (denormalized for Realtime filtering), `parent_variant_id null`, `version int`, `headline`, `cta`, `prompt text` (exact prompt sent), `model`, `fal_request_id`, `asset_id → assets null`, `status variant_status`, `error`, `text_check jsonb null` (vision check result), `cost_usd numeric`, `created_at` | Each render is one row. Approval happens per variant |
+| `assets` | `id uuid pk`, `brand_kit_id`, `kind asset_kind`, `storage_path`, `source_url` (Shopify or fal), `width`, `height`, `mime`, `created_at` | Every file in Storage has exactly one row |
+| `feedback` | `id uuid pk`, `campaign_id`, `scope feedback_scope`, `ad_id null` (when scope = ad), `variant_id null` (the variant it was given on), `text`, `active bool default true`, `created_at` | Campaign rules can be switched off from the UI |
+
+Realtime is enabled for the grid in the M1 migration:
+```sql
+alter publication supabase_realtime add table ad_variants;
+```
+
+RLS is enabled on every table, with a policy of `owner_id is null or owner_id = auth.uid()`. The demo uses the service role on the server. Adding Auth later means populating `owner_id` and dropping the `is null` clause.
+
+**Storage.** One public-read bucket, `ads`, with server-only writes:
+```
+ads/brands/{brandKitId}/logo.png
+ads/brands/{brandKitId}/products/{productId}/{shopifyImageId}.jpg   # only images actually used
+ads/campaigns/{campaignId}/{adId}/{variantId}.raw.png               # fal output, copied immediately
+ads/campaigns/{campaignId}/{adId}/{variantId}.png                   # final 1080×1920 with logo
+```
+
+---
+
+## 5. Image generation
+
+**Bake-off (M0, 45 min max, about $3).** `scripts/bakeoff.ts` runs every combination of the inputs and models below, with the same prompt and copy, 2 runs each, and writes a local `bakeoff.html` grid.
+
+Inputs:
+- **A.** Black Bows hero (`hero-images-bows1.jpg`): a hand with the loop and a busy pattern.
+- **B.** Lavender Pearl studio cutout: an iridescent finish, testing the fallback path.
+
+Models:
+
+| Model | Endpoint | Price (fal, checked 2026-10-25) |
+|---|---|---|
+| Nano Banana 2.1 edit | `google/nano-banana-2.1/edit` | about $0.06 at 2K |
+| Nano Banana Pro edit | `fal-ai/nano-banana-pro/edit` | $0.15 |
+| Seedream 5.0 Lite edit | `fal-ai/bytedance/seedream/v5/lite/edit` | about $0.035 |
+
+Each output is scored 0–2 on:
+1. **Product fidelity**, judged against the source: pattern, loop, camera cutout. This is the gate.
+2. **Text exactness**: the headline and CTA spelled exactly.
+3. **Layout**: 9:16 and the text in the safe zone.
+4. **Latency**
+5. **Cost**
+
+The winner is the highest score among models with fidelity 2 on both inputs. If no model reaches fidelity 2, M4 builds the composite path.
+
+**Result (run 2026-10-26, 12/12 ok, about $0.98): Nano Banana Pro edit.** It was the only model with fidelity 2 on all four outputs. Nano Banana 2.1 failed the gate (1 on each input: a grey loop, a rainbow-shifted finish). Seedream 5.0 Lite passed but tied Pro at 20/28; it got fidelity mostly by pasting the source photo, and it put the headline in the logo zone in 3 of 4 renders. Pro's one failure was a headline rendered twice. A model passed the fidelity gate, so the composite fallback is not built. Full scores are in `bakeoff/scores.json`, and the reasoning is in NOTES.md. Two findings became M4 work: the vision text check is now core (below), and the logo safe zone needs a verified fix (below).
+
+Model parameters:
+- **Nano Banana:** `aspect_ratio: '9:16'`, `resolution: '2K'`, `output_format: 'png'`.
+- **Seedream:** `image_size: { width: 1440, height: 2560 }`. The OpenAPI schema (checked 2026-10-26) gives a native range of 2560×1440 to 4096×4096 pixels, so 1152×2048 would be rescaled; 1440×2560 is the smallest native 9:16.
+
+**Prompt template (`lib/prompt.ts`).**
+```
+Create a full-screen vertical 9:16 mobile ad (portrait interstitial) for {brand.name}.
+
+PRODUCT — use the reference image exactly. The phone case "{product.title}" must keep its exact
+pattern, colors, finish, finger loop and camera cutout. Do not redraw, restyle or add products.
+{isHero ? "Keep the hand and loop interaction from the photo." : "Place the case in a fitting lifestyle scene."}
+
+SCENE — {angleScene}. Palette: {colors.primary}, {colors.secondary}, {colors.background}.
+Mood: {voice.adjectives}. Leave the top 12% clear (logo goes there).
+
+TEXT — render exactly these two strings, spelled exactly, nothing else:
+  Headline (large, top third, bold rounded sans): "{headline}"
+  Button (pill, bottom 15%, {colors.primary} fill, white text): "{cta}"
+No other words, prices, logos or watermarks.
+
+{brandRules}      ← campaign-level feedback, as "Always/Never…" lines
+{revisionNotes}   ← ad-level feedback for this ad's lineage, newest last
+```
+
+**Copy.** `lib/copy.ts` calls `generateObject` with the brand kit, product and angle and returns `{ headline (≤6 words), cta (≤3 words), claimIds: number[] }`. Two guardrails are enforced in code:
+- Any number in the headline must appear verbatim in a cited claim.
+- `offer` copy may only quote `price` or `compare_at_price` exactly.
+
+**Claim check for non-numeric claims.** The headline and CTA are scanned for trigger words from a fixed lexicon: `warranty, guarantee, lifetime, free, returns, reviews, rated, #1, best, proven, prevents, never, original, trusted, since`. Every trigger word that appears must also appear in a claim the copy writer cited (`claimIds`), and that claim must itself be a verbatim substring of the scraped site text. A headline saying "Lifetime warranty" passes only if it cites the site's "lifetime warranty" claim. Otherwise the copy is rewritten once and then dropped back to the `aesthetic` angle.
+
+The model renders the text, as the brief requires.
+
+**Copy-only edits.** Reusing the original source photo and seed with a changed prompt would not reproduce the same image. So when only the copy changes, the **previous variant's `.raw.png`** (the render before the logo is added) is sent as the only reference image with an edit prompt:
+```
+Edit this ad image. Replace the headline text "{old.headline}" with "{new.headline}" and the
+button text "{old.cta}" with "{new.cta}", same font, size, color and position.
+Keep everything else pixel-identical: product, hand, background, layout, colors. Change nothing else.
+```
+The result goes through the same post-processing, including the logo. If the edited render visibly drifts, the user can approve it anyway, revert to the previous version, or run a full regenerate.
+
+**Post-process (`lib/generate.ts`):**
+1. Download the fal output immediately and store it as the `.raw.png` asset.
+2. **Vision text check (core, not stretch).** See below. A failed check counts as an error for step 6.
+3. Resize and crop to 1080×1920 with `sharp`. Pro returns 1536×2752, which is slightly taller than 9:16, so the crop removes about 21px of height before resizing.
+4. Composite the real logo into the safe zone, so the logo is never AI-drawn.
+5. Upload the final `.png`, create its `assets` row, and set the variant to `draft` with `ads.current_variant_id` pointing to it.
+6. On error, retry once with a fresh fal call. A variant gets at most one retry in total, whether the cause is a fal error or a failed text check, which keeps the worst case (2 × ~50s render + 2 checks) well inside the 300s budget. After that, mark the variant `failed` with the reason and show a Retry button on the tile.
+
+**Vision text check.** The bake-off showed Pro rendering the headline twice in 1 of 4 runs, and a marketer would never run that ad, so every render is checked before it can reach `draft`. The check runs on the `.raw.png`, before the logo is composited, so the real logo isn't counted as extra text. A cheap vision model through the AI Gateway (`anthropic/claude-haiku-5-5`) gets the image and returns `generateObject` output: `{ adText: string[], productText: string[], sceneText: string[] }`. That's every legible piece of text, split into overlaid ad copy, text printed on the product itself (the "loopy" loop emboss, the p mark) and legible words on props. The pass rule is enforced in code, not by the model:
+- `adText` contains the headline exactly once and the CTA exactly once, and nothing else. Comparison ignores case and collapses whitespace, because the model may style the CTA in caps, but letters and punctuation must match.
+- `sceneText` is empty. Illegible pseudo-lettering on props, as seen in the bake-off, isn't reported and doesn't fail.
+- `productText` is ignored, because it belongs to the real product.
+
+On a mismatch the reason is stored, for example `text_check: headline appears 2×` or `text_check: extra text "SALE"`. The full check result is saved in `ad_variants.text_check jsonb` so the drawer can show why a version failed. A check costs a fraction of a cent and takes a few seconds.
+
+**Logo safe zone.** In the bake-off, the headline crossed the top-12% line in 6 of 12 renders across all three models, so rewording the prompt and hoping isn't the plan. In M4:
+1. Strengthen the wording in `lib/prompt.ts`: state the zone as a hard constraint ("The top 12% of the image must contain only background: no text, no product, no hands. The headline starts below that line."), and repeat it in the TEXT section next to the headline position.
+2. Re-run 2 Pro renders with `npm run bakeoff -- --only nbpro --input A --tag safezone` and check them against the same 12% line overlay used to score the bake-off.
+3. If either render still crosses the line, stop fighting the model and move the logo. The proposal is a small logo centered just above the CTA pill in the bottom zone, where every model already placed the CTA reliably, with the prompt reserving that strip. The decision and its evidence go into NOTES.md and this section.
+
+**Composite fallback (built only if the bake-off shows drift).** The model generates the scene and text with a blank product area. `sharp` then overlays the untouched product photo, masked with rounded corners and a drop shadow, into that area. Exact product fidelity costs some realism.
+
+---
+
+## 6. How feedback is stored and used
+
+| Level | Where it comes from | Stored as | Injected into |
+|---|---|---|---|
+| **Ad** | "Make the bows one warmer", tile feedback box, or `reviseAd` | `feedback {scope:'ad', ad_id, variant_id, text}` | `{revisionNotes}` for **later variants of that ad only**. The builder walks the `parent_variant_id` chain and includes the notes oldest to newest, so v3 still honors v2's note |
+| **Campaign** | "Never use dark backgrounds", or `addBrandRule` | `feedback {scope:'campaign', active:true, text}` | `{brandRules}` for **every new variant in the campaign**, including new products and angles. A "Rules" panel above the grid lists them with toggles |
+
+Before saving, the agent rewrites free text into a short imperative ("Use warmer, golden-hour lighting"). The original text is kept in the chat. Each variant stores the exact `prompt` it was generated with, so the drawer can show which feedback produced it. That is the visible proof that feedback changed the next generation.
+
+---
+
+## 7. Risks and mitigations
+
+| Risk | Mitigation |
+|---|---|
+| The model redraws the product (pattern drift) | Bake-off fidelity gate, explicit "use reference exactly" prompt, composite fallback |
+| Misspelled, doubled or extra text | Short copy (≤6 and ≤3 words), quoted strings, Pro chosen in the bake-off, and the core vision text check: headline and CTA exactly once each with no other text, else retry once, then `failed` with the reason |
+| fal latency, or the function killed mid-job | `after()` jobs within `maxDuration 300`, per-variant rows with Realtime, and the 5-minute stuck-variant sweep, which first asks fal for the result by `fal_request_id` and otherwise marks the variant `failed` with Retry |
+| fal URLs expire | Copy into Storage before marking the variant done. The DB never stores a fal URL as the asset |
+| 6.7 MB catalog / LLM context | Slimmed server side, top 20 candidates sent as one-liners, internal tags filtered |
+| GIF variant images | `?format=png` for `.gif` sources (the CDN ignores `format=jpg` for GIFs), then `sharp` to JPEG |
+| Semi-transparent or iridescent cases look wrong | Prefer hero shots, which show the case on a phone in a hand. The bake-off includes an iridescent product |
+| Invented claims or fake discounts | `claims` must be substrings of the site, and offer copy only uses real `compare_at_price` |
+| Firecrawl fails or returns a weak result | Fall back to parsing the homepage HTML (title, meta, logo `<img>`, JSON-LD). The user can edit everything in the review card |
+| Runaway cost from the chat ("make 50 more") | Cap of 8 variants per `generateAds` call and 40 per campaign, with the cost per variant tracked in `ad_variants.cost_usd` |
+| AI Elements deprecation (end of Nov 2026) | The components are vendored source. Flag it in the note |
+| iCloud-synced `~/Desktop` restarts dev-server file watchers | The project lives in `~/code/ploy-ads`, outside iCloud, from before scaffolding |
+| Headline overlaps the logo zone (6/12 in the bake-off) | Hard-constraint safe-zone wording, verified with 2 re-run Pro renders in M4; if it still fails, move the logo to the bottom strip above the CTA |
+| Edit-in-place copy changes drift the image | The previous render is the only reference, with a "change nothing else" prompt. Revert and full regenerate are always available |
+
+---
+
+## 8. Build order (about 6 hours, each milestone testable alone)
+
+| # | Milestone | Time | Done when |
+|---|---|---|---|
+| M0 | Bake-off script, pick model | 45m | `npm run bakeoff` writes `bakeoff.html` with 12 outputs, the winner is written into `lib/generate.ts`, and the decision is recorded in NOTES |
+| M1 | Scaffold Next + Tailwind + AI Elements, Supabase migration (including the Realtime publication on `ad_variants`), bucket, `.env.example` | 30m | `npx supabase db reset` runs clean, a test upload or download through `assets` works, and an `ad_variants` update shows up in a Realtime subscription |
+| M2 | `lib/shopify.ts` + `lib/brand.ts` | 50m | `npm run research -- loopycases.com` prints the brand kit, top 3 products with reasons, and goal. A non-Shopify URL prints `not_shopify`. `npm test` covers the tag filter, ranking and claim check |
+| M3 | Chat route + `researchStore` + `confirmBrief` review card | 60m | In the browser, a URL leads to streamed research and then the editable card. Generate creates the campaign row and the agent continues |
+| M4 | `generateAds` + `lib/generate.ts` + Realtime grid + vision text check + safe-zone fix | 95m | Generate fills 6 tiles as they finish. Files appear at the Storage paths. Every `draft` variant has a passing `text_check`, and a forced text mismatch (a stubbed check) retries once and then shows `failed` with the reason. 2 re-run Pro renders clear the logo zone, or the logo has moved to the bottom strip. A forced fal error shows `failed` and Retry, and a row backdated to 6 minutes old is swept to `failed (timeout)` on reload |
+| M5 | Manage: approve, reject, edit copy, download, version drawer | 30m | Edit copy creates v2 from v1's raw render with only the text changed, approve enables download, and statuses persist across a reload |
+| M6 | Feedback: `reviseAd`, `addBrandRule`, Rules panel, `listAds` | 30m | "Warmer" on one ad changes only that ad's v2 prompt. "Never dark backgrounds" appears in the next generation's prompt for every ad |
+| M7 | Deploy to Vercel + submission note | 30m | The production URL works end to end on loopycases.com, and the note covers every decision from this plan |
+
+If time runs short, cut from the bottom: the version drawer (keep the version counter), then the Rules panel toggles (rules still apply).
+
+---
+
+## 9. Out of scope
+
+- Non-Shopify stores (Firecrawl-only product extraction)
+- Real AppLovin or ad-network upload, budgets, bidding, targeting, performance data
+- Video ads, other aspect ratios, carousels
+- Auth, multi-user, teams, roles (the schema is ready for it)
+- Localization and multi-language copy
+- Variant-level targeting (a specific phone model per ad)
+- A/B test orchestration or automatic optimization from results
+- Billing and quota UI beyond the hard caps
+- Full catalog sync and webhooks from Shopify (research is on demand)
