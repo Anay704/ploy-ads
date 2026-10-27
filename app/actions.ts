@@ -6,6 +6,18 @@ import { redirect } from 'next/navigation';
 import { BriefApproval } from '@/lib/agent';
 import { BriefEdits, hasRealDiscount, type BriefData, type BriefProduct } from '@/lib/brief';
 import { retryVariant, sweepStuck } from '@/lib/generate';
+import {
+  addBrandRule,
+  adHistory,
+  editCopy,
+  listRules,
+  regenerateAd,
+  reviseAd,
+  setRuleActive,
+  setVariantStatus,
+  type Rule,
+  type VersionInfo,
+} from '@/lib/manage';
 import { ensureProductImage, must, removeUnusedProductImages } from '@/lib/research';
 import { detectShopify, imageFetchUrl, parseStoreUrl, pickSourceImage, type ShopifyImage } from '@/lib/shopify';
 import { BUCKET, supabaseServer } from '@/lib/supabase/server';
@@ -269,6 +281,8 @@ export type AdTile = {
   photoUrl: string | null; // the product photo, shown while it renders
   error: string | null;
   startedAt: string;
+  versions: number;
+  previousImageUrl: string | null; // the last finished render, shown under a version that is rendering
 };
 
 /** The newest variant of every ad in the campaign, in creation order. The grid's source of truth. */
@@ -286,7 +300,13 @@ export async function listTiles(campaignId: string): Promise<AdTile[]> {
   );
   const url = (path?: string | null) => (path ? db.storage.from(BUCKET).getPublicUrl(path).data.publicUrl : null);
   const latest = new Map<string, (typeof rows)[number]>();
-  for (const r of rows) if (!latest.has(r.ad_id)) latest.set(r.ad_id, r);
+  const previous = new Map<string, string | null>();
+  const counts = new Map<string, number>();
+  for (const r of rows) {
+    counts.set(r.ad_id, (counts.get(r.ad_id) ?? 0) + 1);
+    if (!latest.has(r.ad_id)) latest.set(r.ad_id, r);
+    else if (!previous.has(r.ad_id) && r.render?.storage_path) previous.set(r.ad_id, url(r.render.storage_path));
+  }
   return [...latest.values()]
     .sort((a, b) => (a.ads?.created_at ?? '').localeCompare(b.ads?.created_at ?? ''))
     .map((r) => ({
@@ -302,6 +322,8 @@ export async function listTiles(campaignId: string): Promise<AdTile[]> {
       photoUrl: url(r.ads?.photo?.storage_path),
       error: r.error,
       startedAt: r.created_at,
+      versions: counts.get(r.ad_id) ?? 1,
+      previousImageUrl: previous.get(r.ad_id) ?? null,
     }));
 }
 
@@ -312,4 +334,52 @@ export async function sweepCampaign(campaignId: string): Promise<number> {
 
 export async function retryAd(variantId: string): Promise<void> {
   await retryVariant(variantId);
+}
+
+// ── Managing ads (M5/M6): the grid calls the same functions as the agent's tools ──
+
+export async function approveAd(variantId: string) {
+  await setVariantStatus(variantId, 'approved');
+}
+export async function rejectAd(variantId: string) {
+  await setVariantStatus(variantId, 'rejected');
+}
+export async function unsetAdStatus(variantId: string) {
+  await setVariantStatus(variantId, 'draft');
+}
+export async function editAdCopy(adId: string, headline: string, cta: string): Promise<{ error?: string }> {
+  try {
+    await editCopy(adId, { headline, cta });
+    return {};
+  } catch (e) {
+    return { error: (e as Error).message };
+  }
+}
+export async function giveAdFeedback(adId: string, feedback: string): Promise<{ error?: string; note?: string }> {
+  try {
+    const { note } = await reviseAd(adId, feedback);
+    return { note };
+  } catch (e) {
+    return { error: (e as Error).message };
+  }
+}
+export async function regenerateOneAd(adId: string) {
+  await regenerateAd(adId);
+}
+export async function getAdHistory(adId: string): Promise<VersionInfo[]> {
+  return adHistory(adId);
+}
+export async function getRules(campaignId: string): Promise<Rule[]> {
+  return listRules(campaignId);
+}
+export async function createRule(campaignId: string, text: string): Promise<{ error?: string; rule?: Rule }> {
+  if (!text.trim()) return { error: 'Write the rule first.' };
+  try {
+    return { rule: await addBrandRule(campaignId, text) };
+  } catch (e) {
+    return { error: (e as Error).message };
+  }
+}
+export async function toggleRule(ruleId: string, active: boolean) {
+  await setRuleActive(ruleId, active);
 }

@@ -99,7 +99,7 @@ export function CampaignApp({
         />
         <main className="min-h-0 overflow-y-auto bg-[linear-gradient(180deg,color-mix(in_oklab,var(--brand-2)_10%,white)_0%,white_320px)]">
           <div className="mx-auto max-w-5xl p-8">
-            <Workspace phase={phase} brief={brief} domain={domain} busy={status !== 'ready' && messages.at(-1)?.role === 'user'} tiles={initialTiles} onApproved={onApproved} />
+            <Workspace phase={phase} brief={brief} domain={domain} busy={status !== 'ready' && messages.at(-1)?.role === 'user'} tiles={initialTiles} refreshKey={messages.length + (status === 'ready' ? 1 : 0)} onApproved={onApproved} />
           </div>
         </main>
       </div>
@@ -159,6 +159,7 @@ function Workspace({
   domain,
   busy,
   tiles,
+  refreshKey,
   onApproved,
 }: {
   phase: Phase;
@@ -166,6 +167,7 @@ function Workspace({
   domain: string;
   busy: boolean;
   tiles: AdTile[];
+  refreshKey: number;
   onApproved: (a: BriefApproval) => void;
 }) {
   if (phase.kind === 'not_shopify' || phase.kind === 'failed') {
@@ -184,7 +186,7 @@ function Workspace({
   }
 
   if ((phase.kind === 'review' || phase.kind === 'confirmed') && brief) {
-    if (phase.kind === 'confirmed') return <BriefSummary brief={brief} approval={phase.approval} tiles={tiles} />;
+    if (phase.kind === 'confirmed') return <BriefSummary brief={brief} approval={phase.approval} tiles={tiles} refreshKey={refreshKey} />;
     return (
       // While the agent works on a chat request, the current card dims instead of vanishing.
       <div className={busy ? 'pointer-events-none opacity-50 transition-opacity' : 'transition-opacity'} aria-busy={busy}>

@@ -222,6 +222,15 @@ No other words, prices, logos or watermarks.
 {revisionNotes}   ← ad-level feedback for this ad's lineage, newest last
 ```
 
+**Copy candidates (added before M5).** Each draft is 3 headline candidates. The claim guardrails below run on each one, and a second, cheap call (Claude Haiku 5.5) scores the survivors 1–5 against a rubric and picks the best:
+- specific to the design or claim;
+- benefit-led;
+- natural grammar;
+- no invented words;
+- short.
+
+Under 4 out of 5, the judge's critique goes back for another round, up to 3. The rubric came from reviewing M4's round: "Checkered cocoa for every season's story" said nothing, "loop-ably" isn't a word, and "keep phone close" drops a word.
+
 **Copy.** `lib/copy.ts` calls `generateText` with `output: Output.object(...)` (AI SDK 7 deprecates `generateObject`) with the brand kit, product and angle and returns `{ headline (≤6 words), cta (≤3 words), claimIds: number[] }`.
 
 **Claim groups.** Claims come grouped by topic (`brand_kits.claim_groups`), because sites repeat a promise in several wordings ("lifetime warranty", "Lifetime Loopy® Guarantee"). Copy generation:
@@ -302,6 +311,19 @@ The original plan, kept for the record:
 Before saving, the agent rewrites free text into a short imperative ("Use warmer, golden-hour lighting"). The original text is kept in the chat. Each variant stores the exact `prompt` it was generated with, so the drawer can show which feedback produced it. That is the visible proof that feedback changed the next generation.
 
 ---
+
+**How versions render (M5/M6, `lib/manage.ts`).** Every change makes a new `ad_variants` row (`parent_variant_id` → the version it came from), and the job picks its reference images from the kind of change:
+
+| Change | Prompt | References | From |
+|---|---|---|---|
+| Edit copy (tile or `editCopy`) | PLAN §5 "edit this ad image… change nothing else" | previous raw render only | grid, chat |
+| Ad feedback (`reviseAd`) | base prompt + current brand rules + this ad's notes, oldest first, asking for a change visible at a glance | previous raw render, then the product photo | grid, chat |
+| Regenerate (`regenerateAd`) | base prompt + current brand rules + this ad's notes | product photo | grid, chat |
+
+- **Typed copy follows the same rules.** Copy the marketer types goes through the same claim guardrails, and may cite any approved claim.
+- **The version drawer derives each version's origin** from that data: original, copy edited, which note produced it, or regenerated.
+- **Approve and reject act on the latest finished version.** Download is served by `/api/download/[variantId]` for approved versions only.
+- **The Rules panel above the grid** lists campaign rules with toggles. It refetches when the chat changes, so a rule added in chat appears without a reload.
 
 ## 7. Risks and mitigations
 

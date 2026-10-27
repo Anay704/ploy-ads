@@ -5,10 +5,11 @@ import type { BriefApproval } from '@/lib/agent';
 import type { BriefData } from '@/lib/brief';
 import type { AdTile } from '@/app/actions';
 import { AdGrid } from '@/components/ad-grid';
+import { RulesPanel } from '@/components/rules-panel';
 
 // After Generate: the approved brief and the live grid. Until the agent has queued the round,
 // the slots are honest placeholders labeled by product, not fake ads.
-export function BriefSummary({ brief, approval, tiles }: { brief: BriefData; approval: BriefApproval; tiles: AdTile[] }) {
+export function BriefSummary({ brief, approval, tiles, refreshKey }: { brief: BriefData; approval: BriefApproval; tiles: AdTile[]; refreshKey: number }) {
   const products = approval.products.map((p) => brief.products.find((b) => b.id === p.id) ?? { ...p, imageUrl: null });
   return (
     <div className="space-y-8">
@@ -21,6 +22,8 @@ export function BriefSummary({ brief, approval, tiles }: { brief: BriefData; app
           </p>
         </div>
       </div>
+
+      <RulesPanel campaignId={brief.campaignId} refreshKey={refreshKey} />
 
       <AdGrid
         campaignId={brief.campaignId}

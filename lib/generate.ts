@@ -9,7 +9,7 @@ import sharp from 'sharp';
 import { planRound, SCENES, type Angle } from './angles';
 import type { CampaignGoal } from './agent-goals';
 import { writeCopy } from './copy';
-import { buildPrompt } from './prompt';
+import { buildPrompt, EDIT_PREFIX, REVISION_MARKER } from './prompt';
 import { ensureProductImage, must } from './research';
 import { currentSeason } from './seasons';
 import { pickSourceImage, type ShopifyImage } from './shopify';
@@ -85,6 +85,29 @@ export type QueuedAd = { adId: string; variantId: string; product: string; angle
  * Rendering starts separately (startJobs), so the caller can return before fal finishes.
  */
 export async function queueRound(campaignId: string, opts: { productIds?: string[]; perProduct?: number } = {}): Promise<{ queued: QueuedAd[]; capped: boolean }> {
+  const db = supabaseServer();
+  const { drafted, capped } = await prepareRound(campaignId, opts);
+  const queued: QueuedAd[] = [];
+  for (const d of drafted) {
+    const ad = must(
+      await db.from('ads').insert({ campaign_id: campaignId, product_id: d.product.id, angle: d.copy.angle, source_asset_id: d.sourceAssetId }).select('id').single(),
+      'create ad',
+    );
+    const variant = must(
+      await db
+        .from('ad_variants')
+        .insert({ ad_id: ad.id, campaign_id: campaignId, version: 1, headline: d.copy.headline, cta: d.copy.cta, prompt: d.prompt, model: IMAGE_MODEL.endpoint, status: 'generating' })
+        .select('id')
+        .single(),
+      'create variant',
+    );
+    queued.push({ adId: ad.id, variantId: variant.id, product: d.product.title, angle: d.copy.angle, headline: d.copy.headline, cta: d.copy.cta });
+  }
+  return { queued, capped };
+}
+
+/** Plans the round and writes its copy and prompts, without writing anything to the database. */
+export async function prepareRound(campaignId: string, opts: { productIds?: string[]; perProduct?: number } = {}) {
   const db = supabaseServer();
   const campaign = must(await db.from('campaigns').select('id, status, goal, product_ids, brand_kit_id').eq('id', campaignId).single(), 'load campaign');
   if (campaign.status !== 'active' || !campaign.goal) throw new Error('Confirm the brief before generating.');
@@ -186,23 +209,7 @@ export async function queueRound(campaignId: string, opts: { productIds?: string
     }),
   );
 
-  const queued: QueuedAd[] = [];
-  for (const d of drafted) {
-    const ad = must(
-      await db.from('ads').insert({ campaign_id: campaignId, product_id: d.product.id, angle: d.copy.angle, source_asset_id: d.sourceAssetId }).select('id').single(),
-      'create ad',
-    );
-    const variant = must(
-      await db
-        .from('ad_variants')
-        .insert({ ad_id: ad.id, campaign_id: campaignId, version: 1, headline: d.copy.headline, cta: d.copy.cta, prompt: d.prompt, model: IMAGE_MODEL.endpoint, status: 'generating' })
-        .select('id')
-        .single(),
-      'create variant',
-    );
-    queued.push({ adId: ad.id, variantId: variant.id, product: d.product.title, angle: d.copy.angle, headline: d.copy.headline, cta: d.copy.cta });
-  }
-  return { queued, capped: plan.length < fullPlan.length };
+  return { drafted, capped: plan.length < fullPlan.length };
 }
 
 /** Starts the render jobs after the response is sent. They share the route's maxDuration. */
@@ -224,7 +231,7 @@ export async function runVariant(variantId: string, opts: { resumeRequestId?: st
   const v = must(
     await db
       .from('ad_variants')
-      .select('id, ad_id, campaign_id, headline, cta, prompt, status, ads!ad_variants_ad_id_fkey(source_asset_id, assets!ads_source_asset_id_fkey(storage_path)), campaigns(brand_kit_id)')
+      .select('id, ad_id, campaign_id, parent_variant_id, headline, cta, prompt, status, ads!ad_variants_ad_id_fkey(source_asset_id, assets!ads_source_asset_id_fkey(storage_path)), campaigns(brand_kit_id)')
       .eq('id', variantId)
       .single(),
     'load variant',
@@ -243,12 +250,22 @@ export async function runVariant(variantId: string, opts: { resumeRequestId?: st
         const result = await f.queue.result(IMAGE_MODEL.endpoint, { requestId: opts.resumeRequestId });
         outputUrl = (result.data as { images: { url: string }[] }).images[0].url;
       } else {
-        if (!sourcePath) throw new Error('the ad has no source photo');
-        // fal can't reach a local Supabase, so the photo's bytes go to fal's own storage.
-        const photo = await withRetry(() => download(publicUrl(db, sourcePath)));
-        const imageUrl = await withRetry(() => f.storage.upload(new Blob([new Uint8Array(photo)], { type: 'image/jpeg' })));
+        // Which references a version renders from (PLAN.md §5, §6): a new ad or a regenerate uses
+        // the product photo; a copy edit only the previous raw render (so nothing else moves); a
+        // revision the previous render first, then the product photo to keep the case exact.
+        const prompt = v.prompt ?? '';
+        const parentRaw = v.parent_variant_id ? `campaigns/${v.campaign_id}/${v.ad_id}/${v.parent_variant_id}.raw.png` : null;
+        const paths = prompt.startsWith(EDIT_PREFIX) ? [parentRaw] : prompt.includes(REVISION_MARKER) ? [parentRaw, sourcePath] : [sourcePath];
+        if (paths.some((x) => !x)) throw new Error('a reference image is missing');
+        // fal can't reach a local Supabase, so the images' bytes go to fal's own storage.
+        const imageUrls = await Promise.all(
+          (paths as string[]).map(async (path) => {
+            const bytes = await withRetry(() => download(publicUrl(db, path)));
+            return withRetry(() => f.storage.upload(new Blob([new Uint8Array(bytes)], { type: path.endsWith('.png') ? 'image/png' : 'image/jpeg' })));
+          }),
+        );
         const { data } = await f.subscribe(IMAGE_MODEL.endpoint, {
-          input: IMAGE_MODEL.input(v.prompt ?? '', [imageUrl]) as never,
+          input: IMAGE_MODEL.input(prompt, imageUrls) as never,
           onEnqueue: (requestId) => {
             void db.from('ad_variants').update({ fal_request_id: requestId }).eq('id', variantId);
           },

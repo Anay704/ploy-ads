@@ -144,3 +144,30 @@ Each render was compared at full size against its source photo. The logo zone wa
 **Not verified.** The sweep's recover-from-fal branch: the stuck variants had no saved request ID.
 
 **Cost.** About $4 of fal across the safe-zone re-runs ($0.60) and three rounds. The final round was $0.90: 6 renders, no retries.
+
+## Copy pass, M5 and M6 (2026-10-27)
+
+**Copy.** The writer now drafts 3 candidates, runs the claim guardrails on each, and a cheap judge scores the survivors against a rubric. Under 4 out of 5, its critique goes back for another round. The first rubric said "names this product", which pushed awkward lines like "Prevent drops in Raspberry Dots", so it now says specific to the design or the claim, and naming the product isn't required. Before and after for the M4 round, text only, with no renders:
+
+| Ad | Before | After |
+|---|---|---|
+| Cocoa Checkered · social proof | Trusted since 2012, still loop-ably loved | Trusted since 2012. Checkered, cozy, yours. |
+| Cocoa Checkered · aesthetic | Checkered cocoa for every season's story | Spring to winter, one checkered look |
+| Raspberry Dots · benefit | Loop in comfort, keep phone close | Raspberry dots deserve a good grip |
+| Raspberry Dots · guarantee | Try Loopy 30 days, risk-free | Pop of color, money-back guaranteed. |
+| Night Sky · aesthetic | Night Sky: Stargazing Style, Every Season | Wear the night sky, any season |
+| Night Sky · benefit | Grip like you mean it. | Golden stars that stay in hand |
+
+**Real tests on the hosted project, measured rather than eyeballed.**
+- **Headline edit (v1 → v2):** "Loop in comfort, keep phone close" became "Raspberry dots deserve a good grip". On the raw renders, the mean pixel change is 22.5 in the headline band and 3.2 everywhere else, which is edge noise from re-encoding. Only the text changed.
+- **Ad feedback "warmer lighting":** the first version of the revision prompt ("keep its composition") made a change nobody would see. Warmth (mean R−B) went 55.8 → 58.5. The prompt now asks for a change visible at a glance. The follow-up from chat ("golden-hour light") took it to 94.5.
+  - **Lineage checked:** v3's prompt carries both notes, oldest first, and the brand rule added after v2.
+  - **Side effect:** v3 changed the hand and grip too, so the stronger wording trades some composition stability.
+- **Campaign rule from chat:** "Never use dark backgrounds" was saved by `addBrandRule` and appeared in the next generation's prompt. The agent resolved "the Night Sky stargazing one" via `listAds` and regenerated it. Dark pixels went 22.8% → 10.9%, and brightness rose 9 points.
+- **Cost:** every new version passed its text check on the first render, at $0.15 each, about $0.60 for these tests.
+
+**Screenshots:** `docs/screenshots/m56-*.jpg`.
+
+**Download:** approving v3 enabled download. `/api/download/<id>` returned a 4.9 MB PNG as `loopy-raspberry-dots-guarantee-v3.png`.
+
+**Not verified:** toggling a rule off before a generation.

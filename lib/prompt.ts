@@ -68,3 +68,58 @@ export function buildPrompt(p: PromptInput): string {
   if (p.revisionNotes?.length) lines.push('', 'REVISION NOTES for this ad, oldest first — the latest wins:', ...p.revisionNotes.map((r) => `- ${r}`));
   return lines.join('\n');
 }
+
+// ── Versions (PLAN.md §5, §6) ────────────────────────────────────────────────
+
+// Section headers buildPrompt appends after the base prompt. A new version keeps the base and
+// replaces these, so feedback never piles up as stale text.
+const SECTION_MARKERS = ['\n\nREFERENCE IMAGES —', '\n\nBRAND RULES —', '\n\nREVISION NOTES'];
+
+/** Marks a copy-only edit: the job sends only the previous render as the reference. */
+export const EDIT_PREFIX = 'Edit this ad image.';
+
+/** A revision: the job sends the previous render first, then the product photo. */
+export const REVISION_MARKER = '\n\nREFERENCE IMAGES —';
+
+export function basePrompt(prompt: string): string {
+  const cut = Math.min(...SECTION_MARKERS.map((m) => prompt.indexOf(m)).filter((i) => i >= 0), prompt.length);
+  return prompt.slice(0, cut);
+}
+
+/** PLAN.md §5: a copy change re-renders from the previous raw render and changes nothing else. */
+export function editPrompt(old: { headline: string; cta: string }, next: { headline: string; cta: string }): string {
+  return [
+    EDIT_PREFIX,
+    `Replace the headline text "${old.headline}" with "${next.headline}" and the button text "${old.cta}" with "${next.cta}", in the same font, size, color and position.`,
+    'Keep everything else pixel-identical: product, hand, background, layout, colors. Change nothing else.',
+    'Render each new string exactly once, spelled exactly, and no other words.',
+  ].join('\n');
+}
+
+/**
+ * A new full version of an ad: the original prompt's base, the round's current brand rules and
+ * this ad's revision notes (oldest first). With `fromPrevious`, the previous render is the
+ * starting point, so "warmer lighting" changes the light, not the whole composition.
+ */
+export function revisedPrompt(
+  previous: string,
+  opts: { brandRules: string[]; revisionNotes: string[]; fromPrevious: boolean; headline?: { from: string; to: string }; cta?: { from: string; to: string } },
+): string {
+  let base = basePrompt(previous);
+  if (opts.headline) base = base.replace(`"${opts.headline.from}"`, `"${opts.headline.to}"`);
+  if (opts.cta) base = base.replace(`"${opts.cta.from}"`, `"${opts.cta.to}"`);
+  const lines = [base];
+  if (opts.fromPrevious) {
+    lines.push(
+      '',
+      // "Keep its composition" alone made the model too timid: M5's first "warmer lighting" moved
+      // warmth by ~5%, which no marketer would notice. So the change is asked for explicitly.
+      'REFERENCE IMAGES — the first image is the current version of this ad: keep its composition, product placement and text layout. ' +
+        'Apply the revision notes below clearly and visibly: someone comparing the two images must see the change at a glance. ' +
+        'The second image is the product photo: the case must match it exactly.',
+    );
+  }
+  if (opts.brandRules.length) lines.push('', 'BRAND RULES — follow all of these:', ...opts.brandRules.map((r) => `- ${r}`));
+  if (opts.revisionNotes.length) lines.push('', 'REVISION NOTES for this ad, oldest first — the latest wins:', ...opts.revisionNotes.map((r) => `- ${r}`));
+  return lines.join('\n');
+}

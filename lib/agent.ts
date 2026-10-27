@@ -4,6 +4,7 @@
 import { tool, type InferUITools, type UIMessage } from 'ai';
 import { z } from 'zod';
 import { queueRound, startJobs } from './generate';
+import { addBrandRule, editCopy, listAds, regenerateAd, reviseAd, setVariantStatus } from './manage';
 import { must, research, type ProgressStep } from './research';
 import { supabaseServer } from './supabase/server';
 import { parseStoreUrl } from './shopify';
@@ -162,7 +163,90 @@ export function createTools(ctx: CampaignContext) {
         return { queued: queued.map(({ product, angle, headline, cta }) => ({ product, angle, headline, cta })), capped };
       },
     }),
+
+    listAds: tool({
+      description:
+        'List the campaign ads in grid order (position 1 is top-left), with product, angle, latest version, status and headline. ' +
+        'Call it to resolve "the second one", "the Night Sky one" or "the guarantee ad" before acting on an ad.',
+      inputSchema: z.object({}),
+      execute: async () => ({ ads: await listAds(ctx.campaignId) }),
+    }),
+
+    reviseAd: tool({
+      description:
+        'Ad-level feedback on ONE ad ("make the bows one warmer"): saves the note and renders a new version from the current one. ' +
+        'Pass the feedback as a short imperative ("Use warmer, golden-hour lighting"). Optionally new headline or cta. ' +
+        'Only that ad changes; later versions of it keep honoring the note.',
+      inputSchema: z.object({
+        adId: z.string(),
+        feedback: z.string().describe('a short imperative instruction for the image model'),
+        headline: z.string().optional(),
+        cta: z.string().optional(),
+      }),
+      execute: async ({ adId, feedback, headline, cta }) => {
+        await assertAd(adId);
+        const { variantId, note } = await reviseAd(adId, feedback, { headline, cta, rewrite: false });
+        return { variantId, note, rendering: true };
+      },
+    }),
+
+    editCopy: tool({
+      description: "Change only an ad's headline and/or button text. Re-renders from the current image with nothing else changed.",
+      inputSchema: z.object({ adId: z.string(), headline: z.string(), cta: z.string() }),
+      execute: async ({ adId, headline, cta }) => {
+        await assertAd(adId);
+        return { variantId: await editCopy(adId, { headline, cta }), rendering: true };
+      },
+    }),
+
+    regenerateAd: tool({
+      description: 'A fresh render of one ad with the same copy, the current brand rules and its notes.',
+      inputSchema: z.object({ adId: z.string() }),
+      execute: async ({ adId }) => {
+        await assertAd(adId);
+        return { variantId: await regenerateAd(adId), rendering: true };
+      },
+    }),
+
+    addBrandRule: tool({
+      description:
+        'A campaign-wide rule ("never use dark backgrounds"): applies to every later generation in this campaign, including new products and angles. ' +
+        'Does not re-render existing ads unless the marketer asks. Pass it as a short imperative ("Never use dark backgrounds").',
+      inputSchema: z.object({ rule: z.string() }),
+      execute: async ({ rule }) => {
+        const saved = await addBrandRule(ctx.campaignId, rule, { rewrite: false });
+        return { ruleId: saved.id, rule: saved.text };
+      },
+    }),
+
+    setAdStatus: tool({
+      description: "Approve or reject an ad's latest finished version.",
+      inputSchema: z.object({ adId: z.string(), status: z.enum(['approved', 'rejected']) }),
+      execute: async ({ adId, status }) => {
+        await assertAd(adId);
+        const ads = await listAds(ctx.campaignId);
+        const db = supabaseServer();
+        const { data } = await db
+          .from('ad_variants')
+          .select('id')
+          .eq('ad_id', adId)
+          .in('status', ['draft', 'approved', 'rejected'])
+          .order('version', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (!data) return { ok: false, note: 'That ad has no finished version yet.' };
+        await setVariantStatus(data.id, status);
+        return { ok: true, ad: ads.find((a) => a.adId === adId) };
+      },
+    }),
   };
+
+  // Ad tools only act on this campaign's ads, whatever id the model passes.
+  async function assertAd(adId: string) {
+    const db = supabaseServer();
+    const { data } = await db.from('ads').select('campaign_id').eq('id', adId).maybeSingle();
+    if (data?.campaign_id !== ctx.campaignId) throw new Error('That ad is not in this campaign. Call listAds to find it.');
+  }
 }
 
 export type AgentTools = ReturnType<typeof createTools>;
@@ -186,6 +270,15 @@ While the brief is waiting for approval, the marketer may ask for changes in cha
 After the marketer approves the brief (confirmBrief returns approved: true):
 - Call generateAds right away, with no arguments.
 - Then reply in 1 or 2 short sentences: how many ads are rendering and that the grid fills in as each finishes. Do not list them; the grid shows them. Never claim an ad is finished: you can't see renders finish.
+
+Once ads exist, steer them (the grid is the source of truth; you only report what you did):
+- If the request names an ad by position, product or angle, call listAds first to get its adId.
+- Feedback about ONE ad ("make the bows one warmer"): reviseAd with a short imperative. Only that ad changes.
+- Only the words change ("change the headline to …"): editCopy.
+- A rule for the whole campaign ("never use dark backgrounds", "always show the loop"): addBrandRule with a short imperative. It applies to later generations; existing ads are not re-rendered unless the marketer asks (then regenerateAd those).
+- "More angles", "try another product": generateAds with productIds or perProduct.
+- Approve or reject: setAdStatus.
+- Reply in one short sentence saying what you did and that the grid will update.
 
 Style: plain, warm, brief. No markdown headings. Never invent products, prices, discounts or claims; use only what the tools returned.`;
 }
