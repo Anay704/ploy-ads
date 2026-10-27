@@ -44,7 +44,7 @@ export type ResearchResult =
       logoAssetId: string | null;
       recommended: Recommended[];
       suggestedGoal: Goal;
-      skipped: { title: string; reason: string }[]; // products passed over for the picks, and why
+      skipped: { productId: string; title: string; reason: string }[]; // passed over for the picks, and why
       catalogCount: number;
       candidates: string[]; // top 20 as one-liners: what the agent will see, never raw JSON
     };
@@ -101,7 +101,7 @@ export async function research(
   const [products, brand, collections] = await Promise.all([catalogP, brandP, fetchSeasonalCollections(shop.origin)]);
 
   onProgress({ key: 'picks', label: 'Picking a best seller, a new drop and a seasonal product', status: 'active' });
-  const { picks, ordered, skipped } = pickMix(products, { today: opts.today ?? new Date(), collections, pinnedHandle: target.productHandle });
+  const { picks, ordered, skipped, seasonalLabels } = pickMix(products, { today: opts.today ?? new Date(), collections, pinnedHandle: target.productHandle });
   const rankById = new Map(ordered.map((r) => [r.shopifyId, r]));
   onProgress({ key: 'picks', label: `Picked ${picks.map((p) => p.title).join(', ')}`, status: 'done' });
 
@@ -154,7 +154,13 @@ export async function research(
         value_prop: brand.valueProp,
         audience: brand.audience,
         claims: brand.claims,
-        raw: { ...raw, rejectedClaims: brand.rejectedClaims, sources: brand.sources } as Json,
+        raw: {
+          ...raw,
+          rejectedClaims: brand.rejectedClaims,
+          sources: brand.sources,
+          // productId → "From your Fall Favorites collection", for re-suggesting the goal after a swap.
+          seasonal: Object.fromEntries([...seasonalLabels].flatMap(([shopifyId, label]) => (saved.has(shopifyId) ? [[saved.get(shopifyId)!, label]] : []))),
+        } as Json,
         status: 'draft',
       })
       .eq('id', kit.id)
@@ -168,7 +174,7 @@ export async function research(
     logoAssetId,
     recommended,
     suggestedGoal: suggestGoal(picks),
-    skipped,
+    skipped: skipped.flatMap((s) => (saved.has(s.shopifyId) ? [{ productId: saved.get(s.shopifyId)!, title: s.title, reason: s.reason }] : [])),
     catalogCount: products.length,
     candidates: ordered.slice(0, 20).map(oneLiner),
   };

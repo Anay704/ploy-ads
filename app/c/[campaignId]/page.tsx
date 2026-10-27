@@ -3,7 +3,8 @@ import { notFound } from 'next/navigation';
 import type { AgentUIMessage } from '@/lib/agent';
 import { BUCKET, supabaseServer } from '@/lib/supabase/server';
 import type { BrandColors } from '@/lib/theme';
-import { loadBrief } from '@/app/actions';
+import { listTiles, loadBrief } from '@/app/actions';
+import { sweepStuck } from '@/lib/generate';
 import { CampaignApp } from '@/components/campaign-app';
 import { phaseOf } from '@/components/campaign-state';
 import { WorkspaceSkeleton } from '@/components/workspace-skeleton';
@@ -44,6 +45,9 @@ async function Campaign({ params }: { params: Promise<{ campaignId: string }> })
     proposal?.brandKitId && proposal.productIds
       ? await loadBrief(campaign.id, proposal.brandKitId, proposal.productIds.filter((id): id is string => !!id)).catch(() => null)
       : null;
+  // The stuck rule's server half (PLAN.md §2): a variant generating for 5 minutes is recovered
+  // from fal or marked failed (timeout) before the grid renders.
+  const initialTiles = campaign.status === 'active' ? await sweepStuck(campaign.id).then(() => listTiles(campaign.id)) : [];
   // Before research finishes the kit has no logo or colors; the workspace starts neutral and
   // takes on the brand once the review card loads it.
   const researched = kit.status !== 'researching';
@@ -54,6 +58,7 @@ async function Campaign({ params }: { params: Promise<{ campaignId: string }> })
       domain={kit.domain}
       initialMessages={messages}
       initialBrief={initialBrief}
+      initialTiles={initialTiles}
       initialBrand={{
         name: researched ? (kit.short_name ?? kit.name ?? kit.domain) : kit.domain,
         logoUrl: researched && kit.logo ? db.storage.from(BUCKET).getPublicUrl(kit.logo.storage_path).data.publicUrl : null,

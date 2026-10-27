@@ -133,3 +133,9 @@
   0%, 100% { transform: translateX(0); }
   50% { transform: translateX(3px); }
 }
+
+/* A finished ad fades in over its placeholder. */
+@keyframes reveal {
+  from { opacity: 0; transform: scale(1.02); }
+  to { opacity: 1; transform: scale(1); }
+}

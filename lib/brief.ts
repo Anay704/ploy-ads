@@ -34,6 +34,7 @@ export type BriefProduct = {
   tags: string[];
   reason: string | null;
   imageUrl: string | null;
+  seasonal: string | null; // "From your Fall Favorites collection" when it counts as seasonal today
 };
 
 export type BriefData = {
@@ -58,3 +59,10 @@ export type BriefData = {
 
 /** A product is fair game for offer copy only with a real, non-clearance discount (PLAN.md §5). */
 export const hasRealDiscount = (p: Pick<BriefProduct, 'compareAtPrice' | 'clearance'>) => p.compareAtPrice !== null && !p.clearance;
+
+/** The goal rule from research (PLAN.md §1), applied to whatever products are on the card now. */
+export function suggestGoalFor(products: Pick<BriefProduct, 'compareAtPrice' | 'clearance' | 'seasonal'>[]): (typeof GOALS)[number] {
+  if (products.some((p) => p.seasonal)) return 'seasonal';
+  if (products.some(hasRealDiscount)) return 'sale';
+  return 'evergreen';
+}

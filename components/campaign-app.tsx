@@ -5,7 +5,7 @@ import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport, lastAssistantMessageIsCompleteWithToolCalls } from 'ai';
 import Link from 'next/link';
 import { AlertCircleIcon } from 'lucide-react';
-import { loadBrief } from '@/app/actions';
+import { loadBrief, type AdTile } from '@/app/actions';
 import type { AgentUIMessage, BriefApproval } from '@/lib/agent';
 import type { CampaignGoal } from '@/lib/agent-goals';
 import type { BriefData } from '@/lib/brief';
@@ -26,6 +26,7 @@ export function CampaignApp({
   initialMessages,
   initialBrand,
   initialBrief,
+  initialTiles,
 }: {
   campaignId: string;
   sourceUrl: string;
@@ -33,6 +34,7 @@ export function CampaignApp({
   initialMessages: AgentUIMessage[];
   initialBrand: Brand;
   initialBrief: BriefData | null;
+  initialTiles: AdTile[];
 }) {
   const { messages, sendMessage, addToolOutput, status, error } = useChat<AgentUIMessage>({
     id: campaignId,
@@ -88,10 +90,16 @@ export function CampaignApp({
       </header>
 
       <div className="grid min-h-0 flex-1 grid-cols-[400px_1fr]">
-        <ChatPanel messages={messages} status={status} error={error} onSend={(text) => sendMessage({ text })} />
+        <ChatPanel
+          messages={messages}
+          status={status}
+          error={error}
+          suggestions={phase.kind === 'review' && status === 'ready' ? suggestionsFor(phase) : []}
+          onSend={(text) => sendMessage({ text })}
+        />
         <main className="min-h-0 overflow-y-auto bg-[linear-gradient(180deg,color-mix(in_oklab,var(--brand-2)_10%,white)_0%,white_320px)]">
           <div className="mx-auto max-w-5xl p-8">
-            <Workspace phase={phase} brief={brief} domain={domain} onApproved={onApproved} />
+            <Workspace phase={phase} brief={brief} domain={domain} busy={status !== 'ready' && messages.at(-1)?.role === 'user'} tiles={initialTiles} onApproved={onApproved} />
           </div>
         </main>
       </div>
@@ -120,6 +128,7 @@ function useBrief(campaignId: string, phase: Phase, initial: BriefData | null): 
 function PhaseBadge({ phase }: { phase: Phase }) {
   const label = {
     starting: 'Starting',
+    revising: 'Updating your brief',
     researching: 'Researching',
     not_shopify: 'Not supported',
     failed: 'Research failed',
@@ -135,7 +144,30 @@ function PhaseBadge({ phase }: { phase: Phase }) {
   );
 }
 
-function Workspace({ phase, brief, domain, onApproved }: { phase: Phase; brief: BriefData | null; domain: string; onApproved: (a: BriefApproval) => void }) {
+/**
+ * Chips that steer the brief through the agent (PLAN.md §1, step 5). They only appear while
+ * the brief waits for approval; each sends a chat message the agent turns into tool calls.
+ */
+function suggestionsFor(phase: Extract<Phase, { kind: 'review' }>): string[] {
+  const holiday = phase.research?.skipped[0]?.reason.split(' is ')[0];
+  return [holiday ? `Add a ${holiday} design` : null, 'Make the voice more premium', 'Focus on the newest drops'].filter((s): s is string => !!s);
+}
+
+function Workspace({
+  phase,
+  brief,
+  domain,
+  busy,
+  tiles,
+  onApproved,
+}: {
+  phase: Phase;
+  brief: BriefData | null;
+  domain: string;
+  busy: boolean;
+  tiles: AdTile[];
+  onApproved: (a: BriefApproval) => void;
+}) {
   if (phase.kind === 'not_shopify' || phase.kind === 'failed') {
     return (
       <div className="mx-auto mt-24 max-w-md text-center">
@@ -152,8 +184,10 @@ function Workspace({ phase, brief, domain, onApproved }: { phase: Phase; brief: 
   }
 
   if ((phase.kind === 'review' || phase.kind === 'confirmed') && brief) {
-    if (phase.kind === 'confirmed') return <BriefSummary brief={brief} approval={phase.approval} />;
+    if (phase.kind === 'confirmed') return <BriefSummary brief={brief} approval={phase.approval} tiles={tiles} />;
     return (
+      // While the agent works on a chat request, the current card dims instead of vanishing.
+      <div className={busy ? 'pointer-events-none opacity-50 transition-opacity' : 'transition-opacity'} aria-busy={busy}>
       <ReviewCard
         key={phase.confirm.toolCallId}
         brief={brief}
@@ -161,18 +195,21 @@ function Workspace({ phase, brief, domain, onApproved }: { phase: Phase; brief: 
         suggestedGoal={(phase.confirm.input.goal ?? phase.research?.suggestedGoal ?? 'evergreen') as CampaignGoal}
         onApproved={onApproved}
       />
+      </div>
     );
   }
 
   // Research in flight (or the brief still loading): the live checklist, mirrored large, over
   // the shapes the review card is about to fill.
   const steps = phase.kind === 'researching' ? stepsOf(phase.part) : [];
-  const ready = phase.kind === 'review' || phase.kind === 'confirmed';
+  const ready = phase.kind === 'review' || phase.kind === 'confirmed' || phase.kind === 'revising';
   return (
     <div className="space-y-10">
       <div className="grid grid-cols-[1fr_320px] items-start gap-10">
         <div>
-          <p className="text-sm font-medium text-zinc-500">{ready ? 'Opening your brief' : 'Getting to know the store'}</p>
+          <p className="text-sm font-medium text-zinc-500">
+            {phase.kind === 'revising' ? 'Updating your brief' : ready ? 'Opening your brief' : 'Getting to know the store'}
+          </p>
           <h1 className="mt-1 text-3xl font-semibold tracking-tight">{domain}</h1>
           <p className="mt-3 max-w-lg text-zinc-600">
             Reading the catalog and the brand, then choosing a best seller, a new drop and something seasonal. This takes about half a minute.

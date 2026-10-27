@@ -245,17 +245,50 @@ export function validateClaims(claims: string[], sourceText: string): { kept: st
 
 const HEX = /^#[0-9a-f]{6}$/i;
 
+function rgb(hex: string) {
+  return [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+}
+const toHex = (c: number[]) => `#${c.map((n) => Math.round(Math.max(0, Math.min(255, n))).toString(16).padStart(2, '0')).join('')}`.toUpperCase();
+
+/** True for whites, blacks and greys: they can't carry a brand accent. */
+function isNeutral(hex: string): boolean {
+  const [r, g, b] = rgb(hex);
+  return Math.max(r, g, b) - Math.min(r, g, b) < 30;
+}
+
+function farApart(a: string, b: string): boolean {
+  const [x, y] = [rgb(a), rgb(b)];
+  return Math.hypot(x[0] - y[0], x[1] - y[1], x[2] - y[2]) > 60;
+}
+
+/**
+ * Primary, secondary and accent from the site's colors, each visibly different. Firecrawl
+ * often reports the same color twice (Loopy: accent and button are both mint), so duplicates
+ * and neutrals are skipped, and a missing accent is derived by deepening the primary.
+ */
+export function distinctPalette(candidates: (string | undefined)[], primary: string): { secondary: string; accent: string } {
+  const pool: string[] = [];
+  for (const c of candidates) {
+    if (!c || !HEX.test(c) || isNeutral(c)) continue;
+    const hex = c.toUpperCase();
+    if (farApart(hex, primary) && pool.every((p) => farApart(p, hex))) pool.push(hex);
+  }
+  const deeper = toHex(rgb(primary).map((n) => n * 0.72));
+  const secondary = pool[0] ?? deeper;
+  const accent = pool[1] ?? (farApart(deeper, secondary) ? deeper : toHex(rgb(primary).map((n) => n * 0.5)));
+  return { secondary, accent };
+}
+
 function colorsFromBranding(b?: BrandingProfile): BrandColors | null {
   const c = b?.colors;
   if (!c?.primary || !HEX.test(c.primary)) return null;
   const pick = (v: string | undefined, fallback: string) => (v && HEX.test(v) ? v.toUpperCase() : fallback);
-  return {
-    primary: pick(c.primary, '#111111'),
-    secondary: pick(c.secondary, pick(c.accent, '#FFFFFF')),
-    accent: pick(c.accent, pick(c.secondary, pick(c.primary, '#111111'))),
-    background: pick(c.background, '#FFFFFF'),
-    text: pick(c.textPrimary, '#111111'),
-  };
+  const primary = c.primary.toUpperCase();
+  const { secondary, accent } = distinctPalette(
+    [c.secondary, c.accent, b?.components?.buttonPrimary?.background, b?.components?.buttonSecondary?.background, c.link],
+    primary,
+  );
+  return { primary, secondary, accent, background: pick(c.background, '#FFFFFF'), text: pick(c.textPrimary, '#111111') };
 }
 
 /** Fallback palette: the logo's dominant color as primary, on white. */

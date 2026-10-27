@@ -289,7 +289,20 @@ export type Slot = 'pinned' | 'best_seller' | 'newest' | 'seasonal' | 'next_best
 
 export type ProductPick = RankedProduct & { slot: Slot; pickReason: string; seasonal?: { season?: Season; holiday?: Holiday } };
 
-export type PickResult = { picks: ProductPick[]; ordered: RankedProduct[]; skipped: { title: string; reason: string }[] };
+export type SkippedProduct = { shopifyId: number; title: string; reason: string };
+
+export type PickResult = {
+  picks: ProductPick[];
+  ordered: RankedProduct[];
+  skipped: SkippedProduct[];
+  /** Every product that counts as seasonal today, with the words a marketer sees ("From your Fall Favorites collection"). */
+  seasonalLabels: Map<number, string>;
+};
+
+/** "Oct 8": dates in pick reasons read like a person wrote them. */
+// The date as the store wrote it: published_at carries the store's offset ("2026-10-08T21:00:00-04:00"),
+// so converting to UTC would show the next day.
+const shortDate = (iso: string) => new Date(`${iso.slice(0, 10)}T12:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
 
 const isClearance = (p: SlimProduct) => p.tags.includes('last call');
 const themeOf = (p: SlimProduct) => holidaysIn(`${p.title} ${p.tags.join(' ')}`);
@@ -324,7 +337,11 @@ export function pickMix(
     const late = themeOf(p).find((h) => holidayTooClose(h, opts.today));
     if (late && p.handle !== opts.pinnedHandle) {
       const days = daysUntil(late, opts.today);
-      skipped.push({ title: p.title, reason: `${late.name} theme, ${days} day${days === 1 ? '' : 's'} away (needs ${MIN_HOLIDAY_LEAD_DAYS}+ to ramp)` });
+      skipped.push({
+        shopifyId: p.shopifyId,
+        title: p.title,
+        reason: `${late.name} is ${days} day${days === 1 ? '' : 's'} away, too close to ramp up a campaign (we need ${MIN_HOLIDAY_LEAD_DAYS}+)`,
+      });
       return false;
     }
     return true;
@@ -337,20 +354,17 @@ export function pickMix(
     const p = cands.find((c) => !picks.some((x) => x.shopifyId === c.shopifyId || looksAlike(x, c)));
     if (p) picks.push({ ...p, slot, pickReason: reason(p), seasonal: seasonal?.(p) });
   };
-  const photos = (p: SlimProduct) => `${heroCount(p)} lifestyle photos`;
   const byNewest = (list: RankedProduct[]) =>
     [...list].sort((a, b) => Number(heroCount(b) >= 3) - Number(heroCount(a) >= 3) || Date.parse(b.publishedAt) - Date.parse(a.publishedAt));
 
   const pinned = eligible.find((p) => p.handle === opts.pinnedHandle);
-  if (pinned) picks.push({ ...pinned, slot: 'pinned', pickReason: 'the product you linked' });
+  if (pinned) picks.push({ ...pinned, slot: 'pinned', pickReason: 'The product you linked' });
 
-  take(
-    fresh.filter((p) => p.tags.includes('best seller')),
-    'best_seller',
-    (p) => `best seller: tagged best seller, ${photos(p)}`,
-  );
+  // Reasons are written for the marketer, not as database fields.
+  const bestSellers = fresh.filter((p) => p.tags.includes('best seller'));
+  take(bestSellers, 'best_seller', () => (bestSellers.length === 1 ? 'Your best seller' : `One of your ${bestSellers.length} best sellers`));
 
-  take(byNewest(fresh), 'newest', (p) => `newest: published ${p.publishedAt.slice(0, 10)}${p.tags.includes('new') ? ', tagged new' : ''}, ${photos(p)}`);
+  take(byNewest(fresh), 'newest', (p) => `Your newest drop (${shortDate(p.publishedAt)})`);
 
   // Seasonal: the current season's collection first ("prefer the fall collection"), then a
   // collection or product theme for a holiday 14-60 days out.
@@ -359,7 +373,7 @@ export function pickMix(
     take(
       byNewest(fresh.filter((p) => c.productIds.has(p.shopifyId))),
       'seasonal',
-      (p) => `seasonal: in "${c.title}", and ${season} is the current season; published ${p.publishedAt.slice(0, 10)}`,
+      () => `From your ${c.title} collection`,
       () => ({ season }),
     );
   }
@@ -368,7 +382,7 @@ export function pickMix(
     take(
       byNewest(fresh.filter((p) => c.productIds.has(p.shopifyId))),
       'seasonal',
-      (p) => `seasonal: in "${c.title}", ${h.name} is ${daysUntil(h, opts.today)} days away; published ${p.publishedAt.slice(0, 10)}`,
+      () => `From your ${c.title} collection, for ${h.name} in ${daysUntil(h, opts.today)} days`,
       () => ({ holiday: h }),
     );
   }
@@ -377,14 +391,27 @@ export function pickMix(
     'seasonal',
     (p) => {
       const h = themeOf(p).find((x) => holidayInWindow(x, opts.today))!;
-      return `seasonal: ${h.name} theme, ${daysUntil(h, opts.today)} days away`;
+      return `A ${h.name} design, ${daysUntil(h, opts.today)} days out`;
     },
     (p) => ({ holiday: themeOf(p).find((x) => holidayInWindow(x, opts.today)) }),
   );
 
   // Any slot still empty takes the next product by rank, clearance last.
-  take([...fresh, ...eligible.filter(isClearance)], 'next_best', (p) => `next best by rank: ${p.rankReason}`);
-  take([...fresh, ...eligible.filter(isClearance)], 'next_best', (p) => `next best by rank: ${p.rankReason}`);
+  const nextBest = (p: RankedProduct) => (isClearance(p) ? 'Clearance stock, the best left to feature' : 'One of your top-ranked products');
+  take([...fresh, ...eligible.filter(isClearance)], 'next_best', nextBest);
+  take([...fresh, ...eligible.filter(isClearance)], 'next_best', nextBest);
+
+  // The same seasonal test, applied to the whole catalog, so a product swapped in on the review
+  // card can re-suggest the goal. Holiday-skipped products keep their season: the marketer can
+  // still choose to use one.
+  const seasonalLabels = new Map<number, string>();
+  for (const p of ranked.filter((x) => !isClearance(x))) {
+    const inSeason = collections.find((c) => c.season === season && c.productIds.has(p.shopifyId));
+    const holidayCol = collections.find((c) => c.productIds.has(p.shopifyId) && c.holidays.some((h) => holidayInWindow(h, opts.today)));
+    const theme = themeOf(p).find((h) => holidayInWindow(h, opts.today));
+    const label = inSeason ? `From your ${inSeason.title} collection` : holidayCol ? `From your ${holidayCol.title} collection` : theme ? `A ${theme.name} design` : null;
+    if (label) seasonalLabels.set(p.shopifyId, label);
+  }
 
   const pickIds = new Set(picks.map((p) => p.shopifyId));
   const ordered = [...picks, ...ranked.filter((p) => !pickIds.has(p.shopifyId))].map((p, i) => ({
@@ -392,7 +419,7 @@ export function pickMix(
     rank: i + 1,
     rankReason: 'pickReason' in p ? (p as ProductPick).pickReason : p.rankReason,
   }));
-  return { picks: picks.map((p, i) => ({ ...p, rank: i + 1, rankReason: p.pickReason })), ordered, skipped };
+  return { picks: picks.map((p, i) => ({ ...p, rank: i + 1, rankReason: p.pickReason })), ordered, skipped, seasonalLabels };
 }
 
 /**

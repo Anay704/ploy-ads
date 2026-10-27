@@ -26,6 +26,7 @@ export type Phase =
   | { kind: 'researching'; part?: ResearchPart }
   | { kind: 'not_shopify' }
   | { kind: 'failed'; message: string }
+  | { kind: 'revising'; research?: ResearchDone }
   | { kind: 'review'; research?: ResearchDone; confirm: ConfirmPart & { input: BriefInput } }
   | { kind: 'confirmed'; research?: ResearchDone; confirm: ConfirmPart; approval: BriefApproval };
 
@@ -36,6 +37,8 @@ export function phaseOf(messages: AgentUIMessage[]): Phase {
 
   if (confirm?.state === 'output-available') return { kind: 'confirmed', research: done, confirm, approval: confirm.output };
   if (confirm?.state === 'input-available') return { kind: 'review', research: done, confirm: confirm as ConfirmPart & { input: BriefInput } };
+  // The last brief was superseded by a request in chat; the agent is preparing a new one.
+  if (confirm?.state === 'output-error') return { kind: 'revising', research: done };
   if (research?.state === 'output-error') return { kind: 'failed', message: research.errorText };
   if (research?.state === 'output-available' && research.output.status === 'not_shopify') return { kind: 'not_shopify' };
   if (research) return { kind: 'researching', part: research };

@@ -208,14 +208,21 @@ test('pickMix picks one best seller, one newest and one seasonal product', () =>
       ['seasonal', 'Night Sky'],
     ],
   );
-  assert.match(picks[2].pickReason, /in "Fall Favorites", and fall is the current season/);
+  // Reasons read like a marketer wrote them, not like database fields.
+  assert.deepEqual(
+    picks.map((p) => p.pickReason),
+    ['One of your 2 best sellers', 'Your newest drop (Oct 8)', 'From your Fall Favorites collection'],
+  );
 });
 
 test('pickMix skips products themed on a holiday under 14 days away, and says why', () => {
   const { all, collections } = loopyLike();
   const { picks, skipped } = pickMix(all, { today: TODAY, collections });
   assert.ok(!picks.some((p) => p.title === 'Boo Crew'));
-  assert.deepEqual(skipped, [{ title: 'Boo Crew', reason: 'Halloween theme, 4 days away (needs 14+ to ramp)' }]);
+  assert.deepEqual(
+    skipped.map(({ title, reason }) => ({ title, reason })),
+    [{ title: 'Boo Crew', reason: 'Halloween is 4 days away, too close to ramp up a campaign (we need 14+)' }],
+  );
   // Six weeks earlier, the same product is fair game.
   const early = pickMix(all, { today: new Date('2026-09-15T12:00:00Z'), collections });
   assert.deepEqual(early.skipped, []);
@@ -242,7 +249,7 @@ test('pickMix falls back to a holiday collection 14-60 days out when no season c
   };
   const { picks } = pickMix([items.cocoa, items.raspberry, items.java, items.nightSky], { today: TODAY, collections: [xmas] });
   assert.equal(picks[2].slot, 'seasonal');
-  assert.match(picks[2].pickReason, /Christmas is 59 days away/);
+  assert.equal(picks[2].pickReason, 'From your Holiday | Neutral Tones collection, for Christmas in 59 days');
 });
 
 test('pickMix keeps a pinned product first', () => {
@@ -268,4 +275,11 @@ test('suggestGoal: seasonal with an in-season pick, sale only for non-clearance 
   const onlyClearance = pickMix([items.clearance], { today: TODAY }).picks;
   assert.equal(onlyClearance[0].title, 'Old Favorite');
   assert.equal(suggestGoal(onlyClearance), 'evergreen');
+});
+
+test('pickMix labels every seasonal product, so a swap can re-suggest the goal', () => {
+  const { all, collections, items } = loopyLike();
+  const { seasonalLabels } = pickMix(all, { today: TODAY, collections });
+  assert.equal(seasonalLabels.get(items.nightSky.shopifyId), 'From your Fall Favorites collection');
+  assert.equal(seasonalLabels.get(items.cocoa.shopifyId), undefined);
 });

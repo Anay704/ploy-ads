@@ -3,7 +3,9 @@
 
 import { tool, type InferUITools, type UIMessage } from 'ai';
 import { z } from 'zod';
-import { research, type ProgressStep } from './research';
+import { queueRound, startJobs } from './generate';
+import { must, research, type ProgressStep } from './research';
+import { supabaseServer } from './supabase/server';
 import { parseStoreUrl } from './shopify';
 
 import { GOALS } from './agent-goals';
@@ -113,6 +115,53 @@ export function createTools(ctx: CampaignContext) {
       }),
       outputSchema: BriefApproval,
     }),
+
+    // Steering before approval ("make the voice more premium"). It changes the words around
+    // the brand, never the claims: those stay verbatim from the site.
+    reviseBrief: tool({
+      description:
+        "Change the draft brand kit before the marketer approves it: the name used in ads, the voice, the value proposition or the audience. Claims can't be changed. " +
+        'Afterwards call confirmBrief again so the marketer sees the updated card.',
+      inputSchema: z.object({
+        shortName: z.string().max(40).optional(),
+        voiceAdjectives: z.array(z.string().max(24)).length(3).optional(),
+        voiceSample: z.string().max(200).optional(),
+        valueProp: z.string().max(300).optional(),
+        audience: z.string().max(300).optional(),
+      }),
+      execute: async (edits) => {
+        const db = supabaseServer();
+        const campaign = must(await db.from('campaigns').select('status, brand_kit_id').eq('id', ctx.campaignId).single(), 'load campaign');
+        if (campaign.status !== 'briefing') return { updated: [] as string[], note: 'The brief is already approved; brand changes now go through feedback.' };
+        const kit = must(await db.from('brand_kits').select('voice').eq('id', campaign.brand_kit_id).single(), 'load brand kit');
+        const voice = (kit.voice ?? { adjectives: [], sample: '' }) as { adjectives: string[]; sample: string };
+        const update = {
+          ...(edits.shortName && { short_name: edits.shortName }),
+          ...((edits.voiceAdjectives || edits.voiceSample) && {
+            voice: { adjectives: edits.voiceAdjectives ?? voice.adjectives, sample: edits.voiceSample ?? voice.sample },
+          }),
+          ...(edits.valueProp && { value_prop: edits.valueProp }),
+          ...(edits.audience && { audience: edits.audience }),
+        };
+        must(await db.from('brand_kits').update(update).eq('id', campaign.brand_kit_id).select('id'), 'revise brand kit');
+        return { updated: Object.keys(update), note: 'Saved. Call confirmBrief again to show the updated card.' };
+      },
+    }),
+
+    generateAds: tool({
+      description:
+        'Generate ads for the approved brief: by default 2 angles for each campaign product (6 ads), planned so no two share a setting. ' +
+        'Returns at once with the queued ads; the grid fills in as each one renders. Caps: 8 per call, 40 per campaign.',
+      inputSchema: z.object({
+        productIds: z.array(z.string()).optional().describe('a subset of the campaign products; omit for all'),
+        perProduct: z.number().int().min(1).max(2).optional(),
+      }),
+      execute: async ({ productIds, perProduct }) => {
+        const { queued, capped } = await queueRound(ctx.campaignId, { productIds, perProduct });
+        startJobs(queued.map((q) => q.variantId));
+        return { queued: queued.map(({ product, angle, headline, cta }) => ({ product, angle, headline, cta })), capped };
+      },
+    }),
   };
 }
 
@@ -129,10 +178,14 @@ How a campaign starts:
 2. As soon as research is done, call confirmBrief with its brandKitId, the recommended productIds in order, and the suggestedGoal. Do not restate the brief in text: the review card shows it, and the marketer edits it there.
 3. If research says not_shopify, say in one sentence that only Shopify stores are supported, and stop.
 
+While the brief is waiting for approval, the marketer may ask for changes in chat:
+- Product changes ("add a Halloween design", "focus on the newest drops"): call confirmBrief again with the new productIds (from researchStore's candidates or skipped list) and goal. Products skipped for a too-close holiday may be used when the marketer asks; say the timing risk in one short clause.
+- Brand wording ("make the voice more premium"): call reviseBrief, then confirmBrief again with the same products.
+- Keep the reply to one sentence; the card shows the result.
+
 After the marketer approves the brief (confirmBrief returns approved: true):
-- Reply in 2 or 3 short sentences: what you will generate. That is 6 ads, 3 products x 2 angles, and for each product name the two angles you would use and why, in a few words.
-- Angles come from this fixed set: benefit, social_proof, offer (only if a product has a real discount), aesthetic, guarantee. Pick them for the approved goal.
-- Ad generation is not switched on yet in this version, so say the ads are queued, and do not claim any were made.
+- Call generateAds right away, with no arguments.
+- Then reply in 1 or 2 short sentences: how many ads are rendering and that the grid fills in as each finishes. Do not list them; the grid shows them. Never claim an ad is finished: you can't see renders finish.
 
 Style: plain, warm, brief. No markdown headings. Never invent products, prices, discounts or claims; use only what the tools returned.`;
 }

@@ -32,7 +32,21 @@ export async function POST(req: Request) {
   // A tool output arrives as an update to the last assistant message, not a new message, so
   // replace by id; anything else is appended.
   const stored = (campaign.chat ?? []) as unknown as AgentUIMessage[];
-  const merged = stored.at(-1)?.id === message.id ? [...stored.slice(0, -1), message] : [...stored, message];
+  // A new user message while a brief waits for approval means "change it" (a suggestion chip,
+  // or typed feedback). The open confirmBrief call is closed as superseded, so the model never
+  // sees a tool call without a result, and its next confirmBrief opens a fresh card.
+  const history =
+    message.role === 'user'
+      ? stored.map((m) => ({
+          ...m,
+          parts: m.parts.map((p) =>
+            p.type === 'tool-confirmBrief' && p.state === 'input-available'
+              ? { ...p, state: 'output-error' as const, errorText: 'Superseded: the marketer asked for changes in chat.' }
+              : p,
+          ),
+        }))
+      : stored;
+  const merged = (history.at(-1)?.id === message.id ? [...history.slice(0, -1), message] : [...history, message]) as AgentUIMessage[];
 
   // The client resolves confirmBrief, but the database decides: an approval only counts if the
   // confirmBrief server action actually saved the brief and activated the campaign.

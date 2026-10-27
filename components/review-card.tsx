@@ -2,10 +2,11 @@
 
 import { useMemo, useState, useTransition } from 'react';
 import { ArrowLeftRightIcon, InfoIcon, PlusIcon, SparklesIcon, XIcon } from 'lucide-react';
-import { confirmBrief } from '@/app/actions';
+import { confirmBrief, getBriefProducts } from '@/app/actions';
+import { ANGLE_LABEL, planRound } from '@/lib/angles';
 import type { BriefApproval } from '@/lib/agent';
 import { GOALS, type CampaignGoal } from '@/lib/agent-goals';
-import { hasRealDiscount, type BriefData, type BriefProduct } from '@/lib/brief';
+import { hasRealDiscount, suggestGoalFor, type BriefData, type BriefProduct } from '@/lib/brief';
 import { brandStyle } from '@/lib/theme';
 import { SwapDialog } from '@/components/swap-dialog';
 import type { ResearchDone } from '@/components/campaign-state';
@@ -85,7 +86,7 @@ function ProductTile({ product, slot, reason, onSwap }: { product: BriefProduct;
             )}
           </p>
         </div>
-        {reason && <p className="text-xs leading-relaxed text-zinc-500">{reason.replace(/^[a-z ]+:\s*/, '')}</p>}
+        {reason && <p className="text-xs leading-relaxed text-zinc-500">{reason}</p>}
       </div>
     </div>
   );
@@ -112,7 +113,12 @@ export function ReviewCard({
   const [removed, setRemoved] = useState<Set<string>>(new Set());
   const [products, setProducts] = useState(brief.products);
   const [swappedIds, setSwappedIds] = useState<Set<string>>(new Set());
+  // Reasons for products the marketer brought in ("Chosen by you", "Used anyway: …").
+  const [ownReasons, setOwnReasons] = useState<Map<string, string>>(new Map());
   const [goal, setGoal] = useState<CampaignGoal>(suggestedGoal);
+  // Once the marketer picks a goal, swaps stop re-suggesting it.
+  const [goalTouched, setGoalTouched] = useState(false);
+  const [usingAnyway, setUsingAnyway] = useState<string | null>(null);
   const [swapIndex, setSwapIndex] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
@@ -121,6 +127,34 @@ export function ReviewCard({
   const saleOk = products.some(hasRealDiscount);
   const adCount = products.length * 2;
   const keptGroups = k.claimGroups.map((g) => ({ ...g, claims: g.claims.filter((c) => !removed.has(c)) })).filter((g) => g.claims.length);
+  const recommendedGoal = suggestGoalFor(products);
+  // The same planner generateAds uses, so this preview is exactly what Generate makes.
+  const plan = planRound(
+    products.map((p) => ({ id: p.id, hasDiscount: hasRealDiscount(p), seasonal: !!p.seasonal, bestSeller: p.tags.includes('best seller') })),
+    goal,
+    keptGroups.map((g) => g.topic),
+  );
+
+  const replaceProduct = (index: number, p: BriefProduct, reason: string) => {
+    const next = products.map((x, i) => (i === index ? p : x));
+    setProducts(next);
+    setSwappedIds(new Set([...swappedIds, p.id]));
+    setOwnReasons(new Map([...ownReasons, [p.id, reason]]));
+    if (!goalTouched || (goal === 'sale' && !next.some(hasRealDiscount))) setGoal(suggestGoalFor(next));
+  };
+
+  // "Use anyway" replaces the seasonal pick (or the last product): the override is the
+  // marketer's call, so the skipped product takes the seasonal slot it was kept out of.
+  const keepAnyway = (skipped: { productId: string; title: string; reason: string }) => {
+    setUsingAnyway(skipped.productId);
+    getBriefProducts(k.id, [skipped.productId])
+      .then(([p]) => {
+        if (!p) return;
+        const seasonalIndex = products.findIndex((x) => slotOf.get(x.id) === 'seasonal' && !swappedIds.has(x.id));
+        replaceProduct(seasonalIndex === -1 ? products.length - 1 : seasonalIndex, p, `Used anyway: ${skipped.reason.split(',')[0]}`);
+      })
+      .finally(() => setUsingAnyway(null));
+  };
 
   const generate = () => {
     setError(null);
@@ -168,22 +202,58 @@ export function ReviewCard({
               key={p.id}
               product={p}
               slot={swappedIds.has(p.id) ? 'swapped' : (slotOf.get(p.id) ?? 'next_best')}
-              reason={swappedIds.has(p.id) ? 'Chosen by you.' : p.reason}
+              reason={ownReasons.get(p.id) ?? p.reason}
               onSwap={() => setSwapIndex(i)}
             />
           ))}
         </div>
-        {!!research?.skipped.length && (
-          <p className="flex gap-2 rounded-xl bg-zinc-50 px-4 py-3 text-xs leading-relaxed text-zinc-600">
-            <InfoIcon className="mt-0.5 size-3.5 shrink-0" />
-            <span>
-              Left out for timing: {research.skipped.map((s) => s.title).join(', ')}. {research.skipped[0].reason.replace(/^[^,]+, /, 'The holiday is ')}.
-            </span>
-          </p>
-        )}
+        {(() => {
+          const skipped = research?.skipped.filter((s) => !products.some((p) => p.id === s.productId)) ?? [];
+          if (!skipped.length) return null;
+          return (
+            <div className="rounded-xl bg-zinc-50 px-4 py-3 text-xs leading-relaxed text-zinc-600">
+              <p className="flex gap-2">
+                <InfoIcon className="mt-0.5 size-3.5 shrink-0" />
+                <span>Left out for timing: {skipped[0].reason}.</span>
+              </p>
+              <div className="mt-2 flex flex-wrap gap-2 pl-5">
+                {skipped.map((s) => (
+                  <button
+                    key={s.productId}
+                    type="button"
+                    onClick={() => keepAnyway(s)}
+                    disabled={usingAnyway !== null}
+                    className="inline-flex items-center gap-1.5 rounded-full border border-zinc-200 bg-white px-2.5 py-1 font-medium text-zinc-700 transition hover:border-zinc-400 disabled:opacity-50"
+                  >
+                    {s.title}
+                    <span className="text-zinc-400">·</span>
+                    <span className="text-[var(--brand-text)]">{usingAnyway === s.productId ? 'Adding…' : 'Use anyway'}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          );
+        })()}
+
+        <div className="rounded-xl border border-zinc-200 px-4 py-3">
+          <p className="mb-2 text-xs font-medium text-zinc-500">The {plan.length} ads Generate will make</p>
+          <ul className="space-y-1 text-sm">
+            {products.map((p) => (
+              <li key={p.id} className="flex gap-2">
+                <span className="w-40 shrink-0 truncate font-medium text-zinc-900">{p.title}</span>
+                <span className="text-zinc-600">
+                  {plan
+                    .filter((a) => a.productId === p.id)
+                    .map((a) => ANGLE_LABEL[a.angle])
+                    .join(' + ')}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
       </Section>
 
-      <Section title="Goal" aside={goal === suggestedGoal ? 'Suggested from the products' : undefined}>
+      <Section title="Goal" aside={goal === recommendedGoal ? 'Suggested from the products' : undefined}>
         <div className="grid grid-cols-4 gap-2" role="radiogroup" aria-label="Campaign goal">
           {GOALS.map((g) => {
             const disabled = g === 'sale' && !saleOk;
@@ -195,7 +265,10 @@ export function ReviewCard({
                 role="radio"
                 aria-checked={selected}
                 disabled={disabled}
-                onClick={() => setGoal(g)}
+                onClick={() => {
+                  setGoal(g);
+                  setGoalTouched(true);
+                }}
                 title={disabled ? 'None of these products has a real discount, so there is nothing true to put on sale.' : undefined}
                 className={`rounded-xl border px-3 py-3 text-left transition ${
                   selected ? 'border-[var(--brand)] bg-[color-mix(in_oklab,var(--brand)_12%,white)] ring-1 ring-[var(--brand)]' : 'border-zinc-200 hover:border-zinc-300'
@@ -203,7 +276,7 @@ export function ReviewCard({
               >
                 <span className="flex items-center gap-1.5 text-sm font-medium text-zinc-900">
                   {GOAL_COPY[g].label}
-                  {g === suggestedGoal && <SparklesIcon className="size-3.5 text-[var(--brand-text)]" />}
+                  {g === recommendedGoal && <SparklesIcon className="size-3.5 text-[var(--brand-text)]" />}
                 </span>
                 <span className="mt-0.5 block text-xs leading-snug text-zinc-500">{disabled ? 'No real discounts here' : GOAL_COPY[g].hint}</span>
               </button>
@@ -313,9 +386,7 @@ export function ReviewCard({
         exclude={products.map((p) => p.id)}
         onClose={() => setSwapIndex(null)}
         onPick={(p) => {
-          setProducts(products.map((x, i) => (i === swapIndex ? p : x)));
-          setSwappedIds(new Set([...swappedIds, p.id]));
-          if (goal === 'sale' && !products.map((x, i) => (i === swapIndex ? p : x)).some(hasRealDiscount)) setGoal(suggestedGoal === 'sale' ? 'evergreen' : suggestedGoal);
+          if (swapIndex !== null) replaceProduct(swapIndex, p, 'Chosen by you');
           setSwapIndex(null);
         }}
       />

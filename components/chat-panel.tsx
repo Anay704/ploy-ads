@@ -7,6 +7,7 @@ import { Conversation, ConversationContent, ConversationScrollButton } from '@/c
 import { Message, MessageContent, MessageResponse } from '@/components/ai-elements/message';
 import { PromptInput, PromptInputFooter, PromptInputSubmit, PromptInputTextarea } from '@/components/ai-elements/prompt-input';
 import { Shimmer } from '@/components/ai-elements/shimmer';
+import { Suggestion, Suggestions } from '@/components/ai-elements/suggestion';
 import { Task, TaskContent, TaskTrigger } from '@/components/ai-elements/task';
 import { Tool, ToolContent, ToolHeader } from '@/components/ai-elements/tool';
 import { ResearchChecklist } from '@/components/research-checklist';
@@ -67,6 +68,7 @@ function BriefTool({ part }: { part: ConfirmPart }) {
       </div>
     );
   }
+  if (part.state === 'output-error') return <p className="text-sm text-zinc-500">Brief updated from your request.</p>;
   return <Shimmer className="text-sm">Preparing your brief…</Shimmer>;
 }
 
@@ -74,11 +76,13 @@ export function ChatPanel({
   messages,
   status,
   error,
+  suggestions,
   onSend,
 }: {
   messages: AgentUIMessage[];
   status: ChatStatus;
   error?: Error;
+  suggestions: string[];
   onSend: (text: string) => void;
 }) {
   const last = messages.at(-1);
@@ -117,7 +121,14 @@ export function ChatPanel({
         <ConversationScrollButton />
       </Conversation>
 
-      <div className="border-t bg-white p-3">
+      <div className="space-y-2 border-t bg-white p-3">
+        {suggestions.length > 0 && (
+          <Suggestions>
+            {suggestions.map((s) => (
+              <Suggestion key={s} suggestion={s} onClick={onSend} className="text-xs" />
+            ))}
+          </Suggestions>
+        )}
         <PromptInput
           onSubmit={({ text }) => {
             if (text.trim()) onSend(text.trim());

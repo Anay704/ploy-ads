@@ -5,6 +5,7 @@
 import { redirect } from 'next/navigation';
 import { BriefApproval } from '@/lib/agent';
 import { BriefEdits, hasRealDiscount, type BriefData, type BriefProduct } from '@/lib/brief';
+import { retryVariant, sweepStuck } from '@/lib/generate';
 import { ensureProductImage, must, removeUnusedProductImages } from '@/lib/research';
 import { detectShopify, imageFetchUrl, parseStoreUrl, pickSourceImage, type ShopifyImage } from '@/lib/shopify';
 import { BUCKET, supabaseServer } from '@/lib/supabase/server';
@@ -61,7 +62,7 @@ type ProductRow = {
   images: unknown;
 };
 
-function toBriefProduct(row: ProductRow, storedImage: string | null): BriefProduct {
+function toBriefProduct(row: ProductRow, storedImage: string | null, seasonal: Record<string, string> = {}): BriefProduct {
   const images = (row.images ?? []) as ShopifyImage[];
   const img = pickSourceImage({ images });
   return {
@@ -74,6 +75,7 @@ function toBriefProduct(row: ProductRow, storedImage: string | null): BriefProdu
     reason: row.rank_reason,
     // The copied Storage photo when there is one; the CDN for catalog browsing in Swap.
     imageUrl: storedImage ?? (img ? imageFetchUrl(img.src).replace('width=1080', 'width=480') : null),
+    seasonal: seasonal[row.id] ?? null,
   };
 }
 
@@ -88,7 +90,7 @@ export async function loadBrief(campaignId: string, brandKitId: string, productI
   const kit = must(
     await db
       .from('brand_kits')
-      .select('id, name, short_name, domain, colors, voice, value_prop, audience, claims, claim_groups, logo:assets!brand_kits_logo_asset_id_fkey(storage_path)')
+      .select('id, name, short_name, domain, colors, voice, value_prop, audience, claims, claim_groups, raw, logo:assets!brand_kits_logo_asset_id_fkey(storage_path)')
       .eq('id', brandKitId)
       .single(),
     'load brand kit',
@@ -123,7 +125,7 @@ export async function loadBrief(campaignId: string, brandKitId: string, productI
     },
     products: ids.flatMap((id) => {
       const row = rows.find((r) => r.id === id);
-      return row ? [toBriefProduct(row, stored.get(row.id) ?? null)] : [];
+      return row ? [toBriefProduct(row, stored.get(row.id) ?? null, seasonalOf(kit.raw))] : [];
     }),
   };
 }
@@ -139,9 +141,33 @@ async function storedImages(brandKitId: string, productIds: string[]): Promise<M
   return map;
 }
 
+function seasonalOf(raw: unknown): Record<string, string> {
+  return ((raw as { seasonal?: Record<string, string> } | null)?.seasonal ?? {}) as Record<string, string>;
+}
+
+async function seasonalFor(brandKitId: string) {
+  const { data } = await supabaseServer().from('brand_kits').select('raw').eq('id', brandKitId).single();
+  return seasonalOf(data?.raw);
+}
+
+/** Specific products for the card, e.g. a holiday product the marketer chose to "Use anyway". */
+export async function getBriefProducts(brandKitId: string, ids: string[]): Promise<BriefProduct[]> {
+  const db = supabaseServer();
+  const rows = must(
+    await db.from('products').select('id, title, price, compare_at_price, tags, rank_reason, images').eq('brand_kit_id', brandKitId).in('id', ids),
+    'load products',
+  );
+  const seasonal = await seasonalFor(brandKitId);
+  return ids.flatMap((id) => {
+    const r = rows.find((x) => x.id === id);
+    return r ? [toBriefProduct(r, null, seasonal)] : [];
+  });
+}
+
 /** The Swap picker: available products by rank, clearance last, optionally filtered by title. */
 export async function listSwapCandidates(brandKitId: string, query = ''): Promise<BriefProduct[]> {
   const db = supabaseServer();
+  const seasonal = await seasonalFor(brandKitId);
   let q = db
     .from('products')
     .select('id, title, price, compare_at_price, tags, rank_reason, images')
@@ -152,7 +178,7 @@ export async function listSwapCandidates(brandKitId: string, query = ''): Promis
     .limit(60);
   if (query.trim()) q = q.ilike('title', `%${query.trim().replace(/[%_]/g, '')}%`);
   const rows = must(await q, 'list products');
-  return rows.map((r) => toBriefProduct(r, null)).sort((a, b) => Number(a.clearance) - Number(b.clearance));
+  return rows.map((r) => toBriefProduct(r, null, seasonal)).sort((a, b) => Number(a.clearance) - Number(b.clearance));
 }
 
 // ── Generate ─────────────────────────────────────────────────────────────────
@@ -226,4 +252,64 @@ export async function confirmBrief(input: BriefEdits): Promise<BriefApproval> {
     products: productIds.map((id) => ({ id, title: products.find((p) => p.id === id)!.title })),
     claimTopics: edits.claimGroups.map((g) => g.topic),
   };
+}
+
+// ── The grid ─────────────────────────────────────────────────────────────────
+
+export type AdTile = {
+  variantId: string;
+  adId: string;
+  product: string;
+  angle: string;
+  version: number;
+  status: 'generating' | 'draft' | 'approved' | 'rejected' | 'failed';
+  headline: string;
+  cta: string;
+  imageUrl: string | null; // the final 1080×1920 render
+  photoUrl: string | null; // the product photo, shown while it renders
+  error: string | null;
+  startedAt: string;
+};
+
+/** The newest variant of every ad in the campaign, in creation order. The grid's source of truth. */
+export async function listTiles(campaignId: string): Promise<AdTile[]> {
+  const db = supabaseServer();
+  const rows = must(
+    await db
+      .from('ad_variants')
+      .select(
+        'id, ad_id, version, status, headline, cta, error, created_at, render:assets!ad_variants_asset_id_fkey(storage_path), ads!ad_variants_ad_id_fkey(angle, created_at, products(title), photo:assets!ads_source_asset_id_fkey(storage_path))',
+      )
+      .eq('campaign_id', campaignId)
+      .order('version', { ascending: false }),
+    'load ads',
+  );
+  const url = (path?: string | null) => (path ? db.storage.from(BUCKET).getPublicUrl(path).data.publicUrl : null);
+  const latest = new Map<string, (typeof rows)[number]>();
+  for (const r of rows) if (!latest.has(r.ad_id)) latest.set(r.ad_id, r);
+  return [...latest.values()]
+    .sort((a, b) => (a.ads?.created_at ?? '').localeCompare(b.ads?.created_at ?? ''))
+    .map((r) => ({
+      variantId: r.id,
+      adId: r.ad_id,
+      product: r.ads?.products?.title ?? 'Product',
+      angle: r.ads?.angle ?? '',
+      version: r.version,
+      status: r.status,
+      headline: r.headline,
+      cta: r.cta,
+      imageUrl: url(r.render?.storage_path),
+      photoUrl: url(r.ads?.photo?.storage_path),
+      error: r.error,
+      startedAt: r.created_at,
+    }));
+}
+
+/** The grid's client timer calls this when a tile has been generating for 5 minutes. */
+export async function sweepCampaign(campaignId: string): Promise<number> {
+  return sweepStuck(campaignId);
+}
+
+export async function retryAd(variantId: string): Promise<void> {
+  await retryVariant(variantId);
 }

@@ -109,3 +109,38 @@ Each render was compared at full size against its source photo. The logo zone wa
   - **Sale can't be chosen falsely:** it's disabled when no product has a real, non-clearance discount, because there would be nothing true to put on sale.
   - **Screenshots:** in `docs/screenshots/m3-*.jpg`.
 - **Testing used the local Supabase stack.** Pushing migration 0003 to the hosted project was blocked by the session's permission rules, so `npm run dev:local` points the app at the local stack (`scripts/dev-local.sh`). The hosted project needs `npx supabase db push` before `npm run dev` works against it.
+
+## M4: generation (2026-10-27)
+
+**Brief fixes from your review.**
+- **Marketer-worded reasons:** "One of your 4 best sellers", "Your newest drop (Oct 8)", "From your Fall Favorites collection". The date is read as the store wrote it; converting to UTC had shown Oct 9.
+- **"Use anyway" on skipped holiday products.**
+- **A per-product angle preview from the real planner.**
+- **Suggestion chips that steer the brief through the agent** (`reviseBrief`, then a new `confirmBrief`).
+- **A distinct accent color:** derived by deepening the primary, since Loopy's other candidates were neutrals.
+- **One-click "Try loopycases.com".**
+- **A goal that re-suggests after a swap** until the marketer picks one.
+- **Claim chips that announce the claim text** (already in place since M3).
+
+**Logo layout.** The strengthened top safe zone failed twice over (the headline still crossed it, and the model painted solid bars), so the logo is now a badge beside the CTA, placed by detecting where the button actually is. See PLAN.md §5.
+
+**What the real Loopy rounds found, all fixed and tested.** Three rounds on the hosted project.
+1. **Every job died immediately.** `ad_variants` and `ads` are joined by two foreign keys, so the embed was ambiguous. Fixed by naming the key.
+2. **The text check failed headlines set on 3 lines.** It only joined 2. Fixed to join runs of up to 4.
+3. **An open book in a scene put a page number in the ad.** The text check was right to fail it. The scene now has no printed props.
+4. **Copy fell back to aesthetic too often.** The model kept writing 7-word headlines. It now gets 3 drafts with the long headline quoted back.
+5. **Fallbacks collided.** A fallback could give two ads the same angle, scene and headline. Fallback ads now take an unused setting, and repeated headlines are redrafted.
+6. **"Free" slipped through.** "Try Loopy Free for 30 Days" passed the word-level guardrail. A trigger word must now match the claim's own compound.
+7. **Network blips burned paid re-renders.** "fetch failed" was Node 26 reusing a closed HTTP/2 session to Supabase (`ERR_HTTP2_INVALID_SESSION`). It cost a render retry or left a variant stuck. Network I/O now retries in place, and a good render is never re-rendered for a storage error.
+8. **Rating stars appeared without a reviews claim.** They're now only added when the ad cites one.
+9. **Two cozy warm-drink scenes read alike.** One was replaced with a kitchen scene.
+
+**Verified live.**
+- **Realtime grid:** waits for readiness, then fills tile by tile.
+- **Stuck sweep:** turned three stuck tiles into "Took too long to render" at the 5-minute mark.
+- **Retry:** re-rendered a failed tile.
+- **Text check:** caught the M0 doubled headline in a dry run.
+
+**Not verified.** The sweep's recover-from-fal branch: the stuck variants had no saved request ID.
+
+**Cost.** About $4 of fal across the safe-zone re-runs ($0.60) and three rounds. The final round was $0.90: 6 renders, no retries.

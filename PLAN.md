@@ -75,7 +75,8 @@ supabase/migrations/0001_init.sql
 |---|---|---|---|
 | `researchStore` | `{ url }` | `{ brandKitId, brandKit, recommended: Product[3], suggestedGoal, catalogCount }` or `{ error: "not_shopify" }` | Upserts `brand_kits` (status `draft`) and the slimmed `products` rows. Copies **only** the logo and the chosen hero image for each recommended product into Storage as `assets` |
 | `confirmBrief` **(pause)** | `{ brandKitId, productIds, goal }`, filled by the agent from research. The brand kit is not in the input: the card loads it from the database, so the model can point at products but can't alter a claim, price or color | `{ approved: true, campaignId, goal, shortName, products[], claimTopics[] }`, as returned by the client | None from the agent. The Generate button calls the `confirmBrief` server action, which validates the edits (claims may be removed, never rewritten), saves the brand kit as `confirmed`, copies photos for swapped-in products, and activates the campaign (`briefing` → `active`). The client then calls `addToolOutput`. The chat route rejects an approval the database doesn't back (409) |
-| `generateAds` | `{ campaignId, productIds?, angles?: Angle[], perProduct?: number }` | `{ variantIds, queued }` | Writes copy (`lib/copy.ts`), inserts `ads` and `ad_variants` (`generating`), and starts fal jobs in `after()` |
+| `generateAds` | `{ productIds?, perProduct? }` (bound to the campaign) | `{ queued: [{product, angle, headline, cta}], capped }` | Plans the round (`planRound`), writes copy (`lib/copy.ts`), inserts `ads` and `ad_variants` (`generating`), and starts fal jobs in `after()`. Caps: 8 per call, 40 per campaign |
+| `reviseBrief` | `{ shortName?, voiceAdjectives?, voiceSample?, valueProp?, audience? }` | `{ updated[] }` | Before approval only. Changes the brand kit's wording, never its claims; the agent then calls `confirmBrief` again. A new chat message supersedes the open `confirmBrief` (the route closes it as an error result, so the model never sees a dangling call) |
 | `reviseAd` | `{ adId, feedback?, headline?, cta? }` | `{ variantId }` | Inserts `feedback` (scope `ad`) and a child `ad_variants` row (`generating`, `parent_variant_id`), then starts the job |
 | `addBrandRule` | `{ campaignId, rule }` | `{ feedbackId, activeRules }` | Inserts `feedback` (scope `campaign`). Applies to all later generations and does not regenerate existing ads unless asked |
 | `setStatus` | `{ variantId, status: 'approved' \| 'rejected' }` | `{ ok }` | Updates `ad_variants.status` |
@@ -85,7 +86,7 @@ Grid buttons call the same logic through server actions (`lib/generate.ts`) with
 
 **The exact pause point.** After `researchStore` returns, the system prompt requires the agent's next call to be `confirmBrief`, and generation never starts before that tool has an output. It is the only blocking step. Everything after it is steering, not gating.
 
-**Angles** come from a fixed set, and the LLM picks 2 per product for round 1 based on the goal: `benefit` (StoptheDrop®, grip), `social_proof` (70,000+ five-star reviews, since 2012), `offer` (only if there is a real `compare_at_price`), `aesthetic` (the product's look and season), and `guarantee` (lifetime warranty).
+**Angles** come from a fixed set, and **code** picks 2 per product (`planRound` in `lib/angles.ts`, pure and shared by the review card's preview and `generateAds`, so the preview is exactly what Generate makes). It balances angles across the round, leads a best seller with social proof and a seasonal product with aesthetic while that angle is unused, only uses social proof or guarantee when a matching claim group exists, spreads claim topics, and gives every ad a different scene. The angles are: `benefit` (StoptheDrop®, grip), `social_proof` (70,000+ five-star reviews, since 2012), `offer` (only if there is a real `compare_at_price`), `aesthetic` (the product's look and season), and `guarantee` (lifetime warranty).
 
 **Research details (`lib/shopify.ts`, `lib/brand.ts`):**
 - **URL normalization.** A `/products/<handle>` URL goes to `/products/<handle>.json`, and that product is pinned as pick #1. Any other URL is treated as the store root.
@@ -232,6 +233,11 @@ Two guardrails are enforced in code:
 - Any number in the headline must appear verbatim in a cited claim.
 - `offer` copy may only quote `price` or `compare_at_price` exactly.
 
+- Trailing punctuation isn't part of a number ("since 2012, …").
+- A trigger word must be used the way the claim uses it: a claim of "risk-free returns" allows "risk-free", not "free" on its own. "Try Loopy Free for 30 Days" passed the first version of the check, and a risk-free trial isn't free.
+- Each ad gets a different suggested CTA, and the copy writer sees the round's other headlines, so a round doesn't repeat one button or line.
+- The writer gets up to 3 drafts in the planned angle before falling back to aesthetic with no claims. A fallback ad takes the next unused setting.
+
 **Claim check for non-numeric claims.** The headline and CTA are scanned for trigger words from a fixed lexicon: `warranty, guarantee, lifetime, free, returns, reviews, rated, #1, best, proven, prevents, never, original, trusted, since`. Every trigger word that appears must also appear in a claim the copy writer cited (`claimIds`), and that claim must itself be a verbatim substring of the scraped site text. A headline saying "Lifetime warranty" passes only if it cites the site's "lifetime warranty" claim. Otherwise the copy is rewritten once and then dropped back to the `aesthetic` angle.
 
 The model renders the text, as the brief requires.
@@ -248,7 +254,7 @@ The result goes through the same post-processing, including the logo. If the edi
 1. Download the fal output immediately and store it as the `.raw.png` asset.
 2. **Vision text check (core, not stretch).** See below. A failed check counts as an error for step 6.
 3. Resize and crop to 1080×1920 with `sharp`. Pro returns 1536×2752, which is slightly taller than 9:16, so the crop removes about 21px of height before resizing.
-4. Composite the real logo into the safe zone, so the logo is never AI-drawn.
+4. Composite the real logo on a white pill beside the detected CTA, so the logo is never AI-drawn.
 5. Upload the final `.png`, create its `assets` row, and set the variant to `draft` with `ads.current_variant_id` pointing to it.
 6. On error, retry once with a fresh fal call. A variant gets at most one retry in total, whether the cause is a fal error or a failed text check, which keeps the worst case (2 × ~50s render + 2 checks) well inside the 300s budget. After that, mark the variant `failed` with the reason and show a Retry button on the tile.
 
@@ -271,7 +277,13 @@ On a mismatch the reason is stored, for example `text_check: headline appears 2�
 4. **Ban the failure mode that was seen.** The prompt adds: "A real photograph, not a template: no color bands, frames, stickers or collage." Pro run 2 (color bands) and Seedream run 2 (sticker collage) both failed that way.
 5. **Verify with the safe-zone re-run.** The 2 re-run Pro renders use two different angles, and they are judged on both the 12% line and whether the scenes are clearly different.
 
-**Logo safe zone.** In the bake-off, the headline crossed the top-12% line in 6 of 12 renders across all three models, so rewording the prompt and hoping isn't the plan. In M4:
+**Logo safe zone. Result (M4): the logo moved to a badge beside the CTA.**
+- **The experiment failed twice over.** With the hard-constraint wording, both re-run Pro renders still crossed the 12% line. Worse, both painted a solid color bar to "keep the band empty", which is exactly the template look we ban.
+- **The new layout.** The prompt now only asks for a narrow, centered button and a clear bottom-left corner. It never says "empty", which is what invited the bar. Two more renders confirmed no bands and a clear corner.
+- **Placing the badge.** Post-processing finds the actual CTA pill (the brand primary in the bottom 22%) and puts the logo, on a white pill, beside it, or centered above it when there's no room. The model ignored the 40% width in 4 of 6 ads in the Loopy round.
+- **Screenshots:** `docs/screenshots/m4-safezone-*.jpg`.
+
+The original plan, kept for the record:
 1. Strengthen the wording in `lib/prompt.ts`: state the zone as a hard constraint ("The top 12% of the image must contain only background: no text, no product, no hands. The headline starts below that line."), and repeat it in the TEXT section next to the headline position.
 2. Re-run 2 Pro renders with `npm run bakeoff -- --only nbpro --input A --tag safezone` (one per angle, see Scene variety; the script hard-codes `aesthetic` today, so M4 adds an `--angles benefit,aesthetic` option that sets one angle per run) and check them against the same 12% line overlay used to score the bake-off.
 3. If either render still crosses the line, stop fighting the model and move the logo. The proposal is a small logo centered just above the CTA pill in the bottom zone, where every model already placed the CTA reliably, with the prompt reserving that strip. The decision and its evidence go into NOTES.md and this section.

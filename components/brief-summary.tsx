@@ -3,10 +3,12 @@
 import { CheckCircle2Icon } from 'lucide-react';
 import type { BriefApproval } from '@/lib/agent';
 import type { BriefData } from '@/lib/brief';
+import type { AdTile } from '@/app/actions';
+import { AdGrid } from '@/components/ad-grid';
 
-// After Generate: the approved brief, and the 6 ad slots the grid will fill in M4. The slots
-// are honest placeholders, labeled by product, not fake ads.
-export function BriefSummary({ brief, approval }: { brief: BriefData; approval: BriefApproval }) {
+// After Generate: the approved brief and the live grid. Until the agent has queued the round,
+// the slots are honest placeholders labeled by product, not fake ads.
+export function BriefSummary({ brief, approval, tiles }: { brief: BriefData; approval: BriefApproval; tiles: AdTile[] }) {
   const products = approval.products.map((p) => brief.products.find((b) => b.id === p.id) ?? { ...p, imageUrl: null });
   return (
     <div className="space-y-8">
@@ -20,7 +22,11 @@ export function BriefSummary({ brief, approval }: { brief: BriefData; approval: 
         </div>
       </div>
 
-      <div className="grid grid-cols-6 gap-3">
+      <AdGrid
+        campaignId={brief.campaignId}
+        initial={tiles}
+        placeholders={
+          <div className="grid grid-cols-3 gap-5 xl:grid-cols-6">
         {products.flatMap((p) =>
           [1, 2].map((n) => (
             <div key={`${p.id}-${n}`} className="relative aspect-[9/16] overflow-hidden rounded-2xl border border-dashed border-zinc-300 bg-zinc-50">
@@ -30,13 +36,15 @@ export function BriefSummary({ brief, approval }: { brief: BriefData; approval: 
               )}
               <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-white via-white/90 to-transparent p-3 pt-10">
                 <p className="truncate text-xs font-medium text-zinc-800">{p.title}</p>
-                <p className="text-[11px] text-zinc-500">Angle {n} · queued</p>
+                <p className="text-[11px] text-zinc-500">Angle {n} · writing copy…</p>
               </div>
             </div>
           )),
         )}
       </div>
-      <p className="text-sm text-zinc-500">Ad generation switches on in the next milestone. The agent has described what it will make in the chat.</p>
+        }
+      />
+
     </div>
   );
 }

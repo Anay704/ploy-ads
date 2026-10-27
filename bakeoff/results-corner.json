@@ -1,0 +1,30 @@
+[
+  {
+    "id": "nbpro_A_1-corner",
+    "model": "nbpro",
+    "input": "A",
+    "run": 1,
+    "usd": 0.15,
+    "ok": true,
+    "file": "out/nbpro_A_1-corner.png",
+    "thumb": "thumbs/nbpro_A_1-corner.jpg",
+    "width": 1536,
+    "height": 2752,
+    "latencyS": 30.207,
+    "requestId": "01a17c74-b21e-7b42-a9de-453a1369cebe"
+  },
+  {
+    "id": "nbpro_A_2-corner",
+    "model": "nbpro",
+    "input": "A",
+    "run": 2,
+    "usd": 0.15,
+    "ok": true,
+    "file": "out/nbpro_A_2-corner.png",
+    "thumb": "thumbs/nbpro_A_2-corner.jpg",
+    "width": 1536,
+    "height": 2752,
+    "latencyS": 26.275,
+    "requestId": "01a17c74-b25c-7ae0-acbd-b8098e6863e0"
+  }
+]

@@ -1,0 +1,30 @@
+[
+  {
+    "id": "nbpro_A_1-safezone",
+    "model": "nbpro",
+    "input": "A",
+    "run": 1,
+    "usd": 0.15,
+    "ok": true,
+    "file": "out/nbpro_A_1-safezone.png",
+    "thumb": "thumbs/nbpro_A_1-safezone.jpg",
+    "width": 1536,
+    "height": 2752,
+    "latencyS": 24.65,
+    "requestId": "01a17c73-6abc-7962-93f3-269164bc48f8"
+  },
+  {
+    "id": "nbpro_A_2-safezone",
+    "model": "nbpro",
+    "input": "A",
+    "run": 2,
+    "usd": 0.15,
+    "ok": true,
+    "file": "out/nbpro_A_2-safezone.png",
+    "thumb": "thumbs/nbpro_A_2-safezone.jpg",
+    "width": 1536,
+    "height": 2752,
+    "latencyS": 28.609,
+    "requestId": "01a17c73-6afb-7a53-b439-216aa957bd0b"
+  }
+]

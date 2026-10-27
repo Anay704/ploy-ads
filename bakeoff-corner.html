@@ -1,0 +1,31 @@
+<!doctype html><html><head><meta charset="utf-8"><title>fal bake-off</title>
+<style>
+body{font:14px/1.4 system-ui,sans-serif;margin:24px;background:#fafafa;color:#222}
+table{border-collapse:collapse}td,th{border:1px solid #ddd;padding:8px;vertical-align:top;background:#fff}
+.grid img{width:200px;display:block;border-radius:6px}.src img{width:200px}.src{width:200px;font-weight:600;text-align:left}
+.cell{width:200px}.meta{color:#666;font-size:12px;margin-top:4px}.score{margin-top:4px}.notes{font-size:12px;color:#444;margin-top:2px}
+.pass{background:#e7f7ec}.fail{background:#fdeaea}.err{color:#b00;font-size:12px;word-break:break-word;width:200px}pre{background:#fff;border:1px solid #ddd;padding:12px;white-space:pre-wrap;max-width:900px}
+</style></head><body>
+<h1>fal bake-off (M0)</h1>
+<p>Copy: headline <b>"Style you can hold onto"</b>, CTA <b>"Shop Now"</b>. Scores are 0–2; fidelity is judged against the source photo and is the gate. Click a thumbnail for the full render.</p><p class="notes">0-2 each. Fidelity vs the source photo (pattern, loop, camera cutout) is the gate. Text = headline and CTA spelled exactly, once, with no other words. Layout = 9:16 and the headline below the top-12% logo zone (2 clear, 1 crosses the line, 0 headline mostly inside the zone or the layout is broken). Latency and cost are scored per model.</p>
+<h2>Summary</h2>
+<table><tr><th>Model</th><th>OK</th><th>Min fidelity A / B</th><th>Avg fidelity</th><th>Avg text</th><th>Avg layout</th><th>Latency (score)</th><th>$/image (score)</th><th>Total (4 outputs × 3 criteria, plus latency and cost; max 28)</th><th>Notes</th></tr><tr><td>Nano Banana Pro edit<br><code>fal-ai/nano-banana-pro/edit</code></td><td>2/2</td><td class="fail">– / –</td><td>–</td><td>–</td><td>–</td><td>26–30s (1)</td><td>$0.150 (0)</td><td><b>–</b> (fails gate)</td><td class="notes">26-49s, the variance is queueing. Same 1536x2752 output.</td></tr></table>
+<h2>Outputs</h2>
+<table class="grid"><tr><th>Source</th><th colspan="2">Nano Banana Pro edit</th></tr><tr><th class="src"><div>A. Black Bows hero (hand + loop, busy pattern)</div><img src="bakeoff/sources/A.jpg" alt="source A"></th><td class="cell"><a href="bakeoff/out/nbpro_A_1-corner.png" target="_blank"><img src="bakeoff/thumbs/nbpro_A_1-corner.jpg" alt="nbpro_A_1-corner"></a><div class="meta">run 1 · 30.2s · $0.150 · 1536×2752</div><div class="notes">not scored yet</div></td><td class="cell"><a href="bakeoff/out/nbpro_A_2-corner.png" target="_blank"><img src="bakeoff/thumbs/nbpro_A_2-corner.jpg" alt="nbpro_A_2-corner"></a><div class="meta">run 2 · 26.3s · $0.150 · 1536×2752</div><div class="notes">not scored yet</div></td></tr></table>
+<h2>Prompts</h2><h3>A</h3><pre>Create a full-screen vertical 9:16 mobile ad (portrait interstitial) for Loopy.
+
+PRODUCT — use the reference image exactly. The phone case &quot;Black Bows&quot; must keep its exact
+pattern, colors, finish, finger loop and camera cutout. Do not redraw, restyle or add products. Only this one case appears.
+Keep the hand and loop interaction from the photo.
+
+SCENE — outdoors on a busy city sidewalk at golden hour, the phone held securely by the finger loop mid-stride. Mood: playful, confident, trendy.
+A real photograph, not a template: no color bands, panels, frames, borders, stickers or collage. The scene keeps its own natural colors.
+
+LAYOUT — the headline sits in the top third. The button is a pill centered horizontally near the bottom edge, no wider than 40% of the image width.
+Keep the bottom-left corner, beside the button, free of any text: the scene simply continues there.
+
+TEXT — render exactly these two strings, each exactly once, spelled exactly, and no other words anywhere (including on props):
+  Headline (large, bold rounded sans, #2C2B23 or white for contrast, in the top third, with the scene continuing behind it): &quot;Style you can hold onto&quot;
+  Button (pill, centered near the bottom, #F990A8 fill, #2C2B23 text): &quot;Shop Now&quot;
+No prices, logos, watermarks, labels or extra captions.</pre>
+</body></html>

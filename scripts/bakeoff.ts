@@ -13,7 +13,7 @@ import sharp from 'sharp';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
-import { buildPrompt } from '../lib/prompt';
+import { buildPrompt, type Angle } from '../lib/prompt';
 import { IMAGE_MODEL } from '../lib/generate';
 
 const ROOT = path.resolve(__dirname, '..');
@@ -79,9 +79,18 @@ const INPUTS = [
 // Copy is fixed so text exactness is comparable (5 words, within the ≤6-word limit).
 // Colors are the most-used hexes in loopycases.com's CSS, standing in until M2's brand kit.
 const COPY = { headline: 'Style you can hold onto', cta: 'Shop Now' };
+// Run i uses ANGLES_ARG[i - 1] (default: aesthetic for every run, as in the original bake-off).
+const ANGLES_ARG = (arg('angles')?.split(',') ?? ['aesthetic']) as Angle[];
+const angleFor = (run: number) => ANGLES_ARG[(run - 1) % ANGLES_ARG.length];
+
+// The original 12 renders used the M0 prompt; results.json keeps their scores. Later runs
+// use the current lib/prompt.ts.
 const BRAND = {
   brandName: 'Loopy',
-  colors: { primary: '#F88A8A', secondary: '#8FE8B3', background: '#FFFFFF' },
+  colors: { primary: '#F990A8', text: '#2C2B23' },
+  buttonInk: '#2C2B23',
+  season: 'fall',
+  scene: 0,
   voiceAdjectives: ['playful', 'confident', 'trendy'],
 };
 
@@ -127,7 +136,7 @@ async function prepareSources() {
 
 async function runOne(m: Model, inp: (typeof INPUTS)[number], run: number, imageUrl: string): Promise<Result> {
   const id = `${m.key}_${inp.key}_${run}${TAG ? `-${TAG}` : ''}`;
-  const prompt = buildPrompt({ ...BRAND, productTitle: inp.title, isHero: inp.isHero, angle: 'aesthetic', ...COPY });
+  const prompt = buildPrompt({ ...BRAND, productTitle: inp.title, isHero: inp.isHero, angle: angleFor(run), ...COPY });
   const base = { id, model: m.key, input: inp.key, run, usd: m.usd };
   const t0 = Date.now();
   try {
@@ -166,7 +175,7 @@ async function writeHtml() {
   const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
   const prompt = (k: string) => {
     const inp = INPUTS.find((i) => i.key === k)!;
-    return buildPrompt({ ...BRAND, productTitle: inp.title, isHero: inp.isHero, angle: 'aesthetic', ...COPY });
+    return buildPrompt({ ...BRAND, productTitle: inp.title, isHero: inp.isHero, angle: angleFor(1), ...COPY });
   };
 
   const cell = (r: Result | undefined) => {

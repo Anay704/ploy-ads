@@ -1,6 +1,11 @@
 export type Json = string | number | boolean | null | { [key: string]: Json | undefined } | Json[];
 
 export type Database = {
+  // Allows to automatically instantiate createClient with right options
+  // instead of createClient<Database, { PostgrestVersion: 'XX' }>(URL, KEY)
+  __InternalSupabase: {
+    PostgrestVersion: "14.18";
+  };
   public: {
     Tables: {
       ad_variants: {
@@ -22,7 +27,6 @@ export type Database = {
           text_check: Json | null;
           version: number;
         };
-        ComputedFields: never;
         Insert: {
           ad_id: string;
           asset_id?: string | null;
@@ -100,7 +104,6 @@ export type Database = {
           product_id: string;
           source_asset_id: string | null;
         };
-        ComputedFields: never;
         Insert: {
           angle: Database["public"]["Enums"]["ad_angle"];
           campaign_id: string;
@@ -162,7 +165,6 @@ export type Database = {
           storage_path: string;
           width: number | null;
         };
-        ComputedFields: never;
         Insert: {
           brand_kit_id: string;
           created_at?: string;
@@ -198,7 +200,7 @@ export type Database = {
       brand_kits: {
         Row: {
           audience: string | null;
-          claim_groups: NonNullable<Json>;
+          claim_groups: Json;
           claims: string[];
           colors: Json | null;
           created_at: string;
@@ -215,10 +217,9 @@ export type Database = {
           value_prop: string | null;
           voice: Json | null;
         };
-        ComputedFields: never;
         Insert: {
           audience?: string | null;
-          claim_groups?: NonNullable<Json>;
+          claim_groups?: Json;
           claims?: string[];
           colors?: Json | null;
           created_at?: string;
@@ -237,7 +238,7 @@ export type Database = {
         };
         Update: {
           audience?: string | null;
-          claim_groups?: NonNullable<Json>;
+          claim_groups?: Json;
           claims?: string[];
           colors?: Json | null;
           created_at?: string;
@@ -267,7 +268,7 @@ export type Database = {
       campaigns: {
         Row: {
           brand_kit_id: string;
-          chat: NonNullable<Json>;
+          chat: Json;
           created_at: string;
           goal: Database["public"]["Enums"]["campaign_goal"] | null;
           id: string;
@@ -277,10 +278,9 @@ export type Database = {
           source_url: string | null;
           status: Database["public"]["Enums"]["campaign_status"];
         };
-        ComputedFields: never;
         Insert: {
           brand_kit_id: string;
-          chat?: NonNullable<Json>;
+          chat?: Json;
           created_at?: string;
           goal?: Database["public"]["Enums"]["campaign_goal"] | null;
           id?: string;
@@ -292,7 +292,7 @@ export type Database = {
         };
         Update: {
           brand_kit_id?: string;
-          chat?: NonNullable<Json>;
+          chat?: Json;
           created_at?: string;
           goal?: Database["public"]["Enums"]["campaign_goal"] | null;
           id?: string;
@@ -323,7 +323,6 @@ export type Database = {
           text: string;
           variant_id: string | null;
         };
-        ComputedFields: never;
         Insert: {
           active?: boolean;
           ad_id?: string | null;
@@ -377,7 +376,7 @@ export type Database = {
           description: string | null;
           handle: string;
           id: string;
-          images: NonNullable<Json>;
+          images: Json;
           price: number;
           product_type: string | null;
           rank: number | null;
@@ -386,7 +385,6 @@ export type Database = {
           tags: string[];
           title: string;
         };
-        ComputedFields: never;
         Insert: {
           available?: boolean;
           brand_kit_id: string;
@@ -395,7 +393,7 @@ export type Database = {
           description?: string | null;
           handle: string;
           id?: string;
-          images?: NonNullable<Json>;
+          images?: Json;
           price: number;
           product_type?: string | null;
           rank?: number | null;
@@ -412,7 +410,7 @@ export type Database = {
           description?: string | null;
           handle?: string;
           id?: string;
-          images?: NonNullable<Json>;
+          images?: Json;
           price?: number;
           product_type?: string | null;
           rank?: number | null;
@@ -467,7 +465,9 @@ export type Tables<
     ? keyof (DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"] &
         DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Views"])
     : never) = never,
-> = DefaultSchemaTableNameOrOptions extends { schema: keyof DatabaseWithoutInternals }
+> = DefaultSchemaTableNameOrOptions extends {
+  schema: keyof DatabaseWithoutInternals;
+}
   ? (DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"] &
       DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Views"])[TableName] extends {
       Row: infer R;
@@ -491,7 +491,9 @@ export type TablesInsert<
   }
     ? keyof DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
     : never) = never,
-> = DefaultSchemaTableNameOrOptions extends { schema: keyof DatabaseWithoutInternals }
+> = DefaultSchemaTableNameOrOptions extends {
+  schema: keyof DatabaseWithoutInternals;
+}
   ? DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"][TableName] extends {
       Insert: infer I;
     }
@@ -514,7 +516,9 @@ export type TablesUpdate<
   }
     ? keyof DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
     : never) = never,
-> = DefaultSchemaTableNameOrOptions extends { schema: keyof DatabaseWithoutInternals }
+> = DefaultSchemaTableNameOrOptions extends {
+  schema: keyof DatabaseWithoutInternals;
+}
   ? DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"][TableName] extends {
       Update: infer U;
     }
@@ -537,7 +541,9 @@ export type Enums<
   }
     ? keyof DatabaseWithoutInternals[DefaultSchemaEnumNameOrOptions["schema"]]["Enums"]
     : never) = never,
-> = DefaultSchemaEnumNameOrOptions extends { schema: keyof DatabaseWithoutInternals }
+> = DefaultSchemaEnumNameOrOptions extends {
+  schema: keyof DatabaseWithoutInternals;
+}
   ? DatabaseWithoutInternals[DefaultSchemaEnumNameOrOptions["schema"]]["Enums"][EnumName]
   : DefaultSchemaEnumNameOrOptions extends keyof DefaultSchema["Enums"]
     ? DefaultSchema["Enums"][DefaultSchemaEnumNameOrOptions]
@@ -552,7 +558,9 @@ export type CompositeTypes<
   }
     ? keyof DatabaseWithoutInternals[PublicCompositeTypeNameOrOptions["schema"]]["CompositeTypes"]
     : never) = never,
-> = PublicCompositeTypeNameOrOptions extends { schema: keyof DatabaseWithoutInternals }
+> = PublicCompositeTypeNameOrOptions extends {
+  schema: keyof DatabaseWithoutInternals;
+}
   ? DatabaseWithoutInternals[PublicCompositeTypeNameOrOptions["schema"]]["CompositeTypes"][CompositeTypeName]
   : PublicCompositeTypeNameOrOptions extends keyof DefaultSchema["CompositeTypes"]
     ? DefaultSchema["CompositeTypes"][PublicCompositeTypeNameOrOptions]

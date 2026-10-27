@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "bakeoff": "tsx --env-file-if-exists=.env.local scripts/bakeoff.ts",
+    "bakeoff": "tsx --conditions=react-server --env-file-if-exists=.env.local scripts/bakeoff.ts",
     "verify:m1": "tsx --conditions=react-server --env-file-if-exists=.env.local scripts/verify-m1.ts",
     "db:types": "supabase gen types typescript --local --schema public > lib/supabase/database.types.ts && oxfmt lib/supabase/database.types.ts",
     "db:types:linked": "supabase gen types typescript --linked --schema public > lib/supabase/database.types.ts && oxfmt lib/supabase/database.types.ts",
