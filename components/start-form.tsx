@@ -47,7 +47,7 @@ export function StartForm() {
             name="url"
             value={url}
             onChange={(e) => setUrl(e.target.value)}
-            placeholder="Paste your store or product URL"
+            placeholder="Store or product URL"
             autoComplete="url"
             autoFocus
             className="h-12 w-full bg-transparent text-base outline-none placeholder:text-zinc-400"

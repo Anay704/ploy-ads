@@ -27,8 +27,32 @@ const words = (s: string) => s.trim().split(/\s+/).filter(Boolean);
 const norm = (s: string) => s.toLowerCase().replace(/[®™©]/g, '');
 
 /** Why a draft can't run, or null if it can. Pure, so it is tested directly. */
-export function copyProblem(copy: Copy, input: Pick<CopyInput, 'angle' | 'claims' | 'product'>): string | null {
+/**
+ * Headlines are sentence case (M7 review: "Love the Dots, or Money Back" next to "Cocoa checks
+ * for every season" looked careless). A capital is allowed on the first word, after : . ! ?, and
+ * on names: the brand, the product title and words capitalized in the cited claim.
+ */
+export function sentenceCaseProblem(headline: string, allowed: string[]): string | null {
+  const names = new Set(allowed.flatMap((a) => a.split(/[^A-Za-z0-9®™'-]+/)).filter((w) => /^[A-Z]/.test(w)).map((w) => w.replace(/[®™]/g, '')));
+  const words = headline.split(/\s+/);
+  for (let i = 1; i < words.length; i++) {
+    const w = words[i].replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9'-]+$/g, '').replace(/[®™]/g, '');
+    if (!/^[A-Z][a-z]/.test(w) || names.has(w) || w === 'I') continue;
+    if (/[:.!?]$/.test(words[i - 1])) continue;
+    return `use sentence case: "${w}" should be lowercase`;
+  }
+  return null;
+}
+
+export function copyProblem(
+  copy: Copy,
+  input: Pick<CopyInput, 'angle' | 'claims' | 'product'> & { brandName?: string; sentenceCase?: boolean },
+): string | null {
   const { headline, cta, citedClaim } = copy;
+  if (input.sentenceCase) {
+    const casing = sentenceCaseProblem(headline, [input.brandName ?? '', input.product.title, citedClaim ?? '']);
+    if (casing) return casing;
+  }
   if (words(headline).length > 6) return `headline "${headline}" has ${words(headline).length} words; cut it to 6 or fewer`;
   if (words(cta).length > 3) return `CTA has ${words(cta).length} words (max 3)`;
   if (citedClaim && !input.claims.includes(citedClaim)) return `cited claim "${citedClaim}" is not one of the approved claims`;
@@ -91,6 +115,7 @@ export const COPY_RUBRIC = [
   'Natural grammar: read it aloud. It sounds like something a person would say, with no dropped words and no odd phrasing.',
   'No invented words, forced puns or portmanteaus.',
   'Short: under 6 words when possible.',
+  'Sentence case: capitalize only the first word and names (the brand, the product), never Title Case.',
 ];
 
 async function draftCandidates(input: CopyInput, problem?: string) {
@@ -154,7 +179,7 @@ async function draftBest(
   problem?: string,
 ): Promise<{ copy: Copy | null; score: number; problem: string | null }> {
   const candidates = await draftCandidates(input, problem);
-  const checked = candidates.map((c) => ({ c, issue: copyProblem(c, input) ?? repeats(c) }));
+  const checked = candidates.map((c) => ({ c, issue: copyProblem(c, { ...input, sentenceCase: true }) ?? repeats(c) }));
   const passing = checked.filter((x) => !x.issue).map((x) => x.c);
   if (!passing.length) return { copy: null, score: 0, problem: checked[0].issue };
   const { copy, score, critique } = await pickBest(input, passing);

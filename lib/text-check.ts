@@ -12,6 +12,11 @@ const Reading = z.object({
   adText: z.array(z.string()).describe('every piece of overlaid ad text (headline, button, captions), one entry per occurrence, exactly as spelled'),
   productText: z.array(z.string()).describe('text printed or embossed on the phone case itself'),
   sceneText: z.array(z.string()).describe('legible words on anything else in the scene: signs, cups, packaging, books. Skip illegible or blurred marks.'),
+  defects: z
+    .array(z.string())
+    .describe(
+      'clear, obvious visual defects only: malformed hands or fingers (extra, missing or fused fingers, an impossible grip), a warped, melted or duplicated phone case, or text touching or cut off by the image edge. Empty if none.',
+    ),
 });
 export type TextReading = z.infer<typeof Reading>;
 
@@ -40,6 +45,9 @@ export function judgeText(reading: TextReading, headline: string, cta: string): 
   const extra = ad.filter((t) => !expected.includes(t) && !t.split(' ').every((w) => parts.has(w)));
   if (extra.length) return { pass: false, reason: `extra text "${extra[0]}"` };
   if (reading.sceneText.length) return { pass: false, reason: `legible words in the scene: "${reading.sceneText[0]}"` };
+  // A malformed hand is the first thing a reviewer notices (seen live in M7), so it fails the
+  // render like a misspelling does, and gets the same one retry.
+  if (reading.defects?.length) return { pass: false, reason: `visual defect: ${reading.defects[0]}` };
   return { pass: true, reason: null };
 }
 
@@ -54,7 +62,9 @@ export async function checkRenderText(image: Buffer, headline: string, cta: stri
           { type: 'file', data: image, mediaType: 'image/png' },
           {
             type: 'text',
-            text: 'Transcribe every legible piece of text in this ad image, exactly as spelled, sorted into ad text, text on the phone case, and text elsewhere in the scene. List repeated text once per occurrence. Do not correct spelling.',
+            text:
+              'Transcribe every legible piece of text in this ad image, exactly as spelled, sorted into ad text, text on the phone case, and text elsewhere in the scene. List repeated text once per occurrence. Do not correct spelling. ' +
+              'Then look closely at hands, fingers, the phone case and the image edges, and list any clear visual defect. Only report what is obviously wrong.',
           },
         ],
       },

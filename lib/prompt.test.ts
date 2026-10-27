@@ -41,3 +41,7 @@ test('a copy edit is marked as an edit and names both strings', () => {
   assert.match(e, /"Old line" with "New line"/);
   assert.match(e, /Change nothing else/);
 });
+
+test('the prompt keeps text away from the edges', () => {
+  assert.match(v1, /MARGINS — keep all text at least 8%/);
+});

@@ -91,7 +91,7 @@ export function AdGrid({ campaignId, initial, placeholders }: { campaignId: stri
         </span>
       </div>
       {/* Three wide columns: big enough to judge an ad and fit its actions on one row. */}
-      <div className="grid grid-cols-3 gap-6">
+      <div className="grid grid-cols-2 gap-4 sm:gap-6 lg:grid-cols-3">
         {tiles.map((t) => (
           <Tile key={t.adId} tile={t} onRetry={() => retryAd(t.variantId).then(refresh)} onChanged={refresh} />
         ))}
@@ -390,11 +390,20 @@ function Rendering({ tile }: { tile: AdTile }) {
 
 function Failed({ tile, onRetry }: { tile: AdTile; onRetry: () => void }) {
   const [busy, setBusy] = useState(false);
-  const reason = (tile.error ?? 'unknown error').replace(/^text_check: /, 'Text check: ').replace(/^render failed: /, 'Render failed: ');
+  // Marketers see what happened and what Retry will do, not "fetch failed" (the raw error stays
+  // in the database and the logs).
+  const e = tile.error ?? '';
+  const reason = e.startsWith('text_check: visual defect')
+    ? 'The image had a visual flaw twice (like a malformed hand), so it was held back.'
+    : e.startsWith('text_check: ')
+      ? `The words didn't come out exactly right twice, so it was held back (${e.replace('text_check: ', '')}).`
+      : e.startsWith('saving failed')
+        ? "The image was made but couldn't be saved."
+        : 'The image service had a problem.';
   return (
     <div className="flex size-full flex-col items-center justify-center gap-3 bg-zinc-50 p-4 text-center">
       <AlertTriangleIcon className="size-5 text-amber-500" />
-      <p className="text-xs leading-snug text-zinc-600">{tile.error === 'timeout' ? 'Took too long to render.' : reason}</p>
+      <p className="text-xs leading-snug text-zinc-600">{tile.error === 'timeout' ? 'This one took too long to render.' : reason} Retry makes a fresh attempt.</p>
       <button
         type="button"
         disabled={busy}

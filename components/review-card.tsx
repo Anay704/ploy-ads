@@ -31,7 +31,7 @@ const price = (n: number) => `$${n.toFixed(2)}`;
 
 function Section({ title, aside, children }: { title: string; aside?: React.ReactNode; children: React.ReactNode }) {
   return (
-    <section className="space-y-4 border-t border-zinc-100 px-8 py-7 first:border-t-0">
+    <section className="space-y-4 border-t border-zinc-100 px-5 py-6 first:border-t-0 sm:px-8 sm:py-7">
       <div className="flex items-baseline justify-between gap-4">
         <h3 className="text-sm font-semibold tracking-wide text-zinc-900 uppercase">{title}</h3>
         {aside && <p className="text-xs text-zinc-500">{aside}</p>}
@@ -182,7 +182,7 @@ export function ReviewCard({
   return (
     // The card previews the edited colors live: its own variables follow the inputs.
     <div style={brandStyle(colors)} className="overflow-hidden rounded-3xl border border-zinc-200 bg-white shadow-[0_20px_60px_-20px_rgba(0,0,0,0.18)]">
-      <header className="flex items-center gap-4 bg-[color-mix(in_oklab,var(--brand)_14%,white)] px-8 py-6">
+      <header className="flex flex-wrap items-center gap-4 bg-[color-mix(in_oklab,var(--brand)_14%,white)] px-5 py-5 sm:px-8 sm:py-6">
         {k.logoUrl ? (
           // eslint-disable-next-line @next/next/no-img-element -- the brand's own logo from Storage
           <img src={k.logoUrl} alt={`${k.name} logo`} className="h-9 w-auto max-w-40 object-contain" />
@@ -196,7 +196,7 @@ export function ReviewCard({
       </header>
 
       <Section title="Products" aside="3 products × 2 angles each">
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
           {products.map((p, i) => (
             <ProductTile
               key={p.id}
@@ -254,7 +254,7 @@ export function ReviewCard({
       </Section>
 
       <Section title="Goal" aside={goal === recommendedGoal ? 'Suggested from the products' : undefined}>
-        <div className="grid grid-cols-4 gap-2" role="radiogroup" aria-label="Campaign goal">
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4" role="radiogroup" aria-label="Campaign goal">
           {GOALS.map((g) => {
             const disabled = g === 'sale' && !saleOk;
             const selected = goal === g;
@@ -286,7 +286,7 @@ export function ReviewCard({
       </Section>
 
       <Section title="Brand kit" aside={`From ${k.domain}`}>
-        <div className="grid grid-cols-2 gap-x-8 gap-y-5">
+        <div className="grid grid-cols-1 gap-x-8 gap-y-5 sm:grid-cols-2">
           <div className="space-y-5">
             <div className="grid grid-cols-2 gap-3">
               <Field label="Store name">
@@ -338,7 +338,7 @@ export function ReviewCard({
         <div className="space-y-3">
           {k.claimGroups.map((g) => (
             <div key={g.topic} className="flex items-start gap-4">
-              <span className="w-28 shrink-0 pt-1.5 text-xs font-medium text-zinc-500 capitalize">{g.topic.replace(/-/g, ' ')}</span>
+              <span className="w-20 shrink-0 pt-1.5 text-xs font-medium text-zinc-500 capitalize sm:w-28">{g.topic.replace(/-/g, ' ')}</span>
               <div className="flex flex-wrap gap-2">
                 {g.claims.map((c) => {
                   const off = removed.has(c);
@@ -364,7 +364,7 @@ export function ReviewCard({
         </div>
       </Section>
 
-      <footer className="sticky bottom-0 flex items-center gap-4 border-t border-zinc-100 bg-white/95 px-8 py-5 backdrop-blur">
+      <footer className="sticky bottom-0 flex flex-wrap items-center gap-4 border-t border-zinc-100 bg-white/95 px-5 py-4 backdrop-blur sm:px-8 sm:py-5">
         <p className="flex-1 text-sm text-zinc-600">
           <span className="font-medium text-zinc-900">{adCount} ads</span> · {products.length} products × 2 angles · {GOAL_COPY[goal].label}
           {error && <span className="mt-1 block text-red-700">{error}</span>}

@@ -338,18 +338,27 @@ export async function findButton(img: Buffer, primary: string): Promise<Box | nu
   return box && count > 1500 ? box : null;
 }
 
-/** Where the badge goes: beside the button when there is room, otherwise centered above it. */
+/**
+ * Where the badge goes, always somewhere a designer would put it (never floating mid-scene,
+ * which happened live in M7 when a wide CTA left no room beside it): beside the button on the
+ * left, else on the right, else centered just below it, else as a mark in the top-left corner.
+ */
 export function placeBadge(button: Box | null, size: { bw: number; bh: number }): { x: number; y: number; w: number } {
   const { width: W, height: H } = AD_SIZE;
   const margin = Math.round(W * 0.04);
   const gap = 20;
   const corner = { x: margin, y: H - Math.round(H * 0.04) - size.bh, w: size.bw };
   if (!button) return corner;
-  const room = button.x0 - gap - margin;
   const midY = Math.round((button.y0 + button.y1) / 2 - size.bh / 2);
-  if (room >= size.bw) return { x: margin, y: midY, w: size.bw };
-  if (room >= size.bw * 0.72) return { x: margin, y: midY, w: room }; // a slightly narrower badge still fits
-  return { x: Math.round((W - size.bw) / 2), y: Math.max(0, button.y0 - size.bh - gap), w: size.bw };
+  const left = button.x0 - gap - margin;
+  const right = W - margin - (button.x1 + gap);
+  if (left >= size.bw * 0.72) return { x: margin, y: midY, w: Math.min(size.bw, left) };
+  if (right >= size.bw * 0.72) {
+    const w = Math.min(size.bw, right);
+    return { x: W - margin - w, y: midY, w };
+  }
+  if (H - button.y1 - gap >= size.bh + Math.round(H * 0.015)) return { x: Math.round((W - size.bw) / 2), y: button.y1 + gap, w: size.bw };
+  return { x: margin, y: Math.round(H * 0.03), w: Math.round(size.bw * 0.8) };
 }
 
 /**

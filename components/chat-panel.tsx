@@ -89,7 +89,7 @@ export function ChatPanel({
   const thinking = status === 'submitted' || (status === 'streaming' && last?.role === 'assistant' && last.parts.every((p) => p.type === 'step-start'));
 
   return (
-    <aside className="flex min-h-0 flex-col border-r bg-zinc-50/60">
+    <aside className="order-2 flex min-h-0 flex-col border-t bg-zinc-50/60 lg:order-1 lg:border-t-0 lg:border-r">
       <Conversation>
         <ConversationContent className="gap-5">
           {messages.map((m) => (

@@ -71,8 +71,8 @@ export function CampaignApp({
 
   return (
     <div style={brandStyle(brand.colors)} className="flex h-dvh flex-col bg-white">
-      <header className="flex h-14 shrink-0 items-center gap-4 border-b px-5">
-        <Link href="/" className="flex items-center gap-2 text-sm font-semibold">
+      <header className="flex h-14 shrink-0 items-center gap-3 border-b px-4 lg:gap-4 lg:px-5">
+        <Link href="/" className="flex shrink-0 items-center gap-2 text-sm font-semibold whitespace-nowrap">
           <span className="size-2.5 rounded-full bg-zinc-900" />
           Ploy Ads
         </Link>
@@ -84,12 +84,13 @@ export function CampaignApp({
           ) : (
             <span className="truncate text-sm font-medium">{brand.name}</span>
           )}
-          <span className="truncate text-sm text-zinc-500">{domain}</span>
+          <span className="hidden truncate text-sm text-zinc-500 sm:inline">{domain}</span>
         </div>
         <PhaseBadge phase={phase} />
       </header>
 
-      <div className="grid min-h-0 flex-1 grid-cols-[400px_1fr]">
+      {/* Phones stack the ads above a shorter chat; desktop puts the chat on the left (PLAN.md §1). */}
+      <div className="grid min-h-0 flex-1 grid-rows-[1fr_42dvh] lg:grid-cols-[400px_1fr] lg:grid-rows-1">
         <ChatPanel
           messages={messages}
           status={status}
@@ -97,8 +98,8 @@ export function CampaignApp({
           suggestions={phase.kind === 'review' && status === 'ready' ? suggestionsFor(phase) : []}
           onSend={(text) => sendMessage({ text })}
         />
-        <main className="min-h-0 overflow-y-auto bg-[linear-gradient(180deg,color-mix(in_oklab,var(--brand-2)_10%,white)_0%,white_320px)]">
-          <div className="mx-auto max-w-5xl p-8">
+        <main className="order-1 min-h-0 overflow-y-auto lg:order-2 bg-[linear-gradient(180deg,color-mix(in_oklab,var(--brand-2)_10%,white)_0%,white_320px)]">
+          <div className="mx-auto max-w-5xl p-4 sm:p-8">
             <Workspace phase={phase} brief={brief} domain={domain} busy={status !== 'ready' && messages.at(-1)?.role === 'user'} tiles={initialTiles} refreshKey={messages.length + (status === 'ready' ? 1 : 0)} onApproved={onApproved} />
           </div>
         </main>

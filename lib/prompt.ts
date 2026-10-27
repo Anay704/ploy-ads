@@ -63,6 +63,8 @@ export function buildPrompt(p: PromptInput): string {
     `  Headline (large, bold rounded sans, ${p.colors.text} or white for contrast, ${LOGO_PLACEMENT === 'top' ? `just below the empty top ${band}` : 'in the top third, with the scene continuing behind it'}): "${p.headline}"`,
     `  Button (pill, centered near the bottom, ${p.colors.primary} fill, ${p.buttonInk} text): "${p.cta}"`,
     'No prices, logos, watermarks, labels or extra captions.',
+    // Seen live in M7: a headline set flush against the left edge.
+    'MARGINS — keep all text at least 8% of the image width away from the left and right edges and 4% of the height from the top. Text never touches or runs off an edge.',
   ];
   if (p.brandRules?.length) lines.push('', 'BRAND RULES — follow all of these:', ...p.brandRules.map((r) => `- ${r}`));
   if (p.revisionNotes?.length) lines.push('', 'REVISION NOTES for this ad, oldest first — the latest wins:', ...p.revisionNotes.map((r) => `- ${r}`));

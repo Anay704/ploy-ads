@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { copyProblem } from './copy';
+import { copyProblem, sentenceCaseProblem } from './copy';
 
 const product: { title: string; price: number; compareAtPrice: number | null; description: string } = { title: 'Night Sky', price: 42.99, compareAtPrice: null, description: '' };
 const claims = ['70,000+ five star reviews', 'over 93% of people in-the-Loop would recommend Loopy to a friend'];
@@ -41,4 +41,13 @@ test('a compound claim word must be used whole: risk-free is not free', () => {
 test('punctuation after a number is not part of it', () => {
   const track = ['Trusted since 2012'];
   assert.equal(copyProblem({ headline: 'Since 2012, still looping', cta: 'Shop Now', citedClaim: track[0] }, { angle: 'social_proof', claims: track, product }), null);
+});
+
+test('headlines are sentence case, but names keep their capitals', () => {
+  const allowed = ['Loopy', 'Raspberry Dots', '30 Day Money-Back Guarantee'];
+  assert.match(sentenceCaseProblem('Love the Dots, or Money Back', ['Loopy', 'Night Sky', ''])!, /"Dots"/);
+  assert.equal(sentenceCaseProblem('Raspberry Dots, extra grip included', allowed), null);
+  assert.equal(sentenceCaseProblem('Try Loopy risk-free for 30 days', allowed), null);
+  assert.equal(sentenceCaseProblem('Night Sky: Stargazing every season', ['Night Sky']), null);
+  assert.match(sentenceCaseProblem('Grip Like You Mean It', [])!, /"Like"/);
 });
