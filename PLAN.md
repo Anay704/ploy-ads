@@ -59,7 +59,7 @@ supabase/migrations/0001_init.sql
 
 **Tools.** Each tool is defined with `tool({ description, inputSchema: z.object(...), execute })`. The pause tool `confirmBrief` has **no `execute`**: the client renders it and resolves it with `addToolOutput`. `useChat` uses `sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithToolCalls`, so the agent continues on its own once the user clicks Generate.
 
-**AI Elements used:** `Conversation`, `Message`, `PromptInput`, `Tool` (collapsible research and generation steps), `Task` (research checklist), `Shimmer`/`Loader`, `Suggestion` (chips such as "More angles", "Add a product", "Warmer tone"), and `Image`. AI Elements is scheduled for deprecation. The source is the banner at the top of [elements.ai-sdk.dev](https://elements.ai-sdk.dev/), checked 2026-10-25: "AI Elements is moving to shadcn/ui. This project will be deprecated at the end of November 2026." The components are copied into the repo as source, so this does not block the build. It belongs in the submission note.
+**AI Elements used:** `Conversation`, `Message`, `PromptInput`, `Tool` (collapsible research and generation steps), `Task` (research checklist), `Shimmer` (loading states; the registry no longer has `Loader`, checked 2026-10-27), `Suggestion` (chips such as "More angles", "Add a product", "Warmer tone"), and `Image`. AI Elements is scheduled for deprecation. The source is the banner at the top of [elements.ai-sdk.dev](https://elements.ai-sdk.dev/), checked 2026-10-25: "AI Elements is moving to shadcn/ui. This project will be deprecated at the end of November 2026." The components are copied into the repo as source, so this does not block the build. It belongs in the submission note.
 
 ---
 
@@ -107,7 +107,7 @@ create type feedback_scope as enum ('ad','campaign');
 | Table | Columns | Notes |
 |---|---|---|
 | `brand_kits` | `id uuid pk`, `owner_id uuid null` (auth later), `store_url`, `domain unique`, `name`, `logo_asset_id → assets`, `colors jsonb` (`{primary,secondary,accent,background,text}`), `fonts text[]`, `voice jsonb` (`{adjectives[], sample}`), `value_prop`, `audience`, `claims text[]`, `raw jsonb` (Firecrawl + meta, for debugging), `status brand_status`, `created_at` | Each domain is researched once, and a rerun refreshes it |
-| `products` | `id uuid pk`, `brand_kit_id → brand_kits`, `shopify_id bigint`, `handle`, `title`, `product_type`, `tags text[]` (filtered), `price numeric`, `compare_at_price numeric null`, `description`, `images jsonb` (`[{src,position,isHero}]`, URLs only), `rank int`, `rank_reason` | `unique(brand_kit_id, shopify_id)`. Images stay as CDN URLs until used |
+| `products` | `id uuid pk`, `brand_kit_id → brand_kits`, `shopify_id bigint`, `handle`, `title`, `product_type`, `tags text[]` (filtered), `price numeric`, `compare_at_price numeric null`, `available bool` (ranking and the Swap picker only offer available products), `description`, `images jsonb` (`[{src,position,isHero}]`, URLs only), `rank int`, `rank_reason` | `unique(brand_kit_id, shopify_id)`. Images stay as CDN URLs until used |
 | `campaigns` | `id uuid pk`, `brand_kit_id`, `owner_id null`, `name`, `goal campaign_goal`, `product_ids uuid[]`, `chat jsonb` (UIMessage[] for reload), `created_at` | |
 | `ads` | `id uuid pk`, `campaign_id`, `product_id`, `angle ad_angle`, `source_asset_id → assets` (the product photo used), `current_variant_id → ad_variants null`, `created_at` | An ad is a concept: one product × one angle |
 | `ad_variants` | `id uuid pk`, `ad_id`, `campaign_id` (denormalized for Realtime filtering), `parent_variant_id null`, `version int`, `headline`, `cta`, `prompt text` (exact prompt sent), `model`, `fal_request_id`, `asset_id → assets null`, `status variant_status`, `error`, `text_check jsonb null` (vision check result), `cost_usd numeric`, `created_at` | Each render is one row. Approval happens per variant |
@@ -119,9 +119,24 @@ Realtime is enabled for the grid in the M1 migration:
 alter publication supabase_realtime add table ad_variants;
 ```
 
-RLS is enabled on every table, with a policy of `owner_id is null or owner_id = auth.uid()`. The demo uses the service role on the server. Adding Auth later means populating `owner_id` and dropping the `is null` clause.
+**Realtime readiness (found in M1).** A channel's `SUBSCRIBED` status only means it joined. On a cold Realtime the Postgres change feed comes up a moment later, and Realtime never replays changes made before then. The M1 check missed its first update this way. So the grid in M4:
+1. waits for the channel's `system` message with `extension: 'postgres_changes', status: 'ok'`,
+2. then fetches the campaign's `ad_variants` rows,
+3. then applies Realtime changes on top.
 
-**Storage.** One public-read bucket, `ads`, with server-only writes:
+Fetching after the feed is live means a tile that finished in between is still picked up.
+
+**Keys and RLS.** The project uses Supabase's new API keys:
+- **`SUPABASE_SECRET_KEY` (`sb_secret_…`):** maps to `service_role`, which bypasses RLS. It is only read in `lib/supabase/server.ts`, which imports `server-only`.
+- **`NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` (`sb_publishable_…`):** maps to `anon`. It's used by the browser client for reads and the Realtime grid.
+
+RLS is enabled on every table, with select-only policies for `anon` and `authenticated`:
+- `brand_kits` and `campaigns` use `owner_id is null or owner_id = auth.uid()`.
+- Child tables inherit through an `exists` on their parent: `products` and `assets` via `brand_kits`; `ads`, `ad_variants` and `feedback` via `campaigns`.
+
+There are no write policies, and insert/update/delete are also revoked from `anon` and `authenticated`, so only the server writes. Adding Auth later means populating `owner_id` and dropping the `is null` clause.
+
+**Storage.** One public-read bucket, `ads`, created in the migration (PNG, JPEG and WebP only, 20 MB per file), with server-only writes:
 ```
 ads/brands/{brandKitId}/logo.png
 ads/brands/{brandKitId}/products/{productId}/{shopifyImageId}.jpg   # only images actually used
@@ -271,7 +286,7 @@ Before saving, the agent rewrites free text into a short imperative ("Use warmer
 | # | Milestone | Time | Done when |
 |---|---|---|---|
 | M0 | Bake-off script, pick model | 45m | `npm run bakeoff` writes `bakeoff.html` with 12 outputs, the winner is written into `lib/generate.ts`, and the decision is recorded in NOTES |
-| M1 | Scaffold Next + Tailwind + AI Elements, Supabase migration (including the Realtime publication on `ad_variants`), bucket, `.env.example` | 30m | `npx supabase db reset` runs clean, a test upload or download through `assets` works, and an `ad_variants` update shows up in a Realtime subscription |
+| M1 | Scaffold Next + Tailwind + AI Elements, Supabase migration (including the Realtime publication on `ad_variants`), bucket, `.env.example` | 30m | `npx supabase db reset` runs clean, a test upload or download through `assets` works, and an `ad_variants` update shows up in a Realtime subscription. `npm run verify:m1` runs all three, plus a check that the publishable key can't write |
 | M2 | `lib/shopify.ts` + `lib/brand.ts` | 50m | `npm run research -- loopycases.com` prints the brand kit, top 3 products with reasons, and goal. A non-Shopify URL prints `not_shopify`. `npm test` covers the tag filter, ranking and claim check |
 | M3 | Chat route + `researchStore` + `confirmBrief` review card | 60m | In the browser, a URL leads to streamed research and then the editable card. Generate creates the campaign row and the agent continues |
 | M4 | `generateAds` + `lib/generate.ts` + Realtime grid + vision text check + safe-zone fix | 95m | Generate fills 6 tiles as they finish. Files appear at the Storage paths. Every `draft` variant has a passing `text_check`, and a forced text mismatch (a stubbed check) retries once and then shows `failed` with the reason. 2 re-run Pro renders clear the logo zone, or the logo has moved to the bottom strip. The 6 ads in a round show visibly different scenes (no two share a setting), and none uses color bands, frames or a collage layout. A forced fal error shows `failed` and Retry, and a row backdated to 6 minutes old is swept to `failed (timeout)` on reload |

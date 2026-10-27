@@ -1,6 +1,28 @@
+# dependencies
 node_modules/
-.env.local
-.env*.local
+
+# next.js
+/.next/
+/out/
+/build
+*.tsbuildinfo
+next-env.d.ts
+
+# env: secrets live in .env.local, which is never committed. .env.example is.
+.env*
+!.env.example
+
+# vercel
+.vercel
+
+# supabase local state
+supabase/.branches
+supabase/.temp
+
+# misc
+.DS_Store
+*.pem
+npm-debug.log*
+
 # Full-size bake-off renders are large; thumbnails, sources, results.json and scores.json are kept.
 bakeoff/out/
-.DS_Store
