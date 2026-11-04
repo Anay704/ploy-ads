@@ -1,7 +1,8 @@
 // The image prompt (PLAN.md §5). Every variant stores the exact prompt it was generated with,
 // so the version drawer can show which feedback produced it.
 
-import { SCENES, type Angle } from './angles';
+import { SCENES, SETTING_ACTION, type Angle } from './angles';
+import type { Mode, ProductProfile } from './profile';
 
 export type { Angle };
 
@@ -15,7 +16,7 @@ export const SAFE_BAND = 0.15; // only used by the 'top' layout
 export type PromptInput = {
   brandName: string; // the short name ("Loopy"), never the legal one
   productTitle: string;
-  isHero: boolean; // the reference shows the case in a hand
+  product: ProductProfile; // category, how it's used, what must be preserved (lib/profile.ts)
   angle: Angle;
   scene: number; // index into SCENES[angle]; unique per round
   season: string;
@@ -29,9 +30,34 @@ export type PromptInput = {
   revisionNotes?: string[]; // this ad's lineage feedback, oldest first
 };
 
-export function sceneFor(angle: Angle, scene: number, season: string): string {
+export function sceneFor(angle: Angle, scene: number, season: string, product: Pick<ProductProfile, 'category' | 'mode' | 'use' | 'setting'>): string {
   const options = SCENES[angle];
-  return options[scene % options.length].replace(/\{season\}/g, season);
+  const entry = options[scene % options.length];
+  return (typeof entry === 'string' ? entry : entry[product.mode])
+    .replace(/\{season\}/g, season)
+    .replace(/\{product\}/g, `the ${product.category}`)
+    .replace(/\{use\}/g, product.use)
+    .replace(/\{setting\}/g, product.setting)
+    .replace(/\{action\}/g, SETTING_ACTION[product.setting] ?? 'reaching for something on a shelf');
+}
+
+// How the product shows up when the photo doesn't already show it in use.
+const PLACEMENT: Record<Mode, (category: string) => string> = {
+  held: (c) => `Show the ${c} in a hand or resting naturally in the scene.`,
+  worn: () => 'Show it worn naturally. Any other clothing or accessories are plain and unbranded.',
+  placed: (c) => `Show the ${c} resting naturally in the scene, at a true-to-life size.`,
+};
+
+/** The fidelity section: what the image model must not change, read from the actual photo. */
+export function productSection(title: string, product: ProductProfile): string[] {
+  const features = product.features.length ? product.features : ['its exact pattern, colors, shape and finish', 'any printed label or logo on it'];
+  return [
+    `PRODUCT — use the reference image exactly. The ${product.category} "${title}" must keep its exact look:`,
+    ...features.map((f) => `- ${f}`),
+    'Match the photo exactly in proportions, colors and finish.',
+    `Do not redraw, restyle or add products. Only this one ${product.category} appears.`,
+    product.inUsePhoto ? `Keep the interaction from the photo: ${product.use}.` : PLACEMENT[product.mode](product.category),
+  ];
 }
 
 export function buildPrompt(p: PromptInput): string {
@@ -49,11 +75,9 @@ export function buildPrompt(p: PromptInput): string {
   const lines = [
     `Create a full-screen vertical 9:16 mobile ad (portrait interstitial) for ${p.brandName}.`,
     '',
-    `PRODUCT — use the reference image exactly. The phone case "${p.productTitle}" must keep its exact`,
-    'pattern, colors, finish, finger loop and camera cutout. Do not redraw, restyle or add products. Only this one case appears.',
-    p.isHero ? 'Keep the hand and loop interaction from the photo.' : 'Show the case in a hand or resting naturally in the scene.',
+    ...productSection(p.productTitle, p.product),
     '',
-    `SCENE — ${sceneFor(p.angle, p.scene, p.season)}. Mood: ${p.voiceAdjectives.filter(Boolean).join(', ')}.`,
+    `SCENE — ${sceneFor(p.angle, p.scene, p.season, p.product)}. Mood: ${p.voiceAdjectives.filter(Boolean).join(', ')}.`,
     ...(p.ratingStars ? ['Add a single small row of five gold rating stars under the headline, as a graphic.'] : []),
     'A real photograph, not a template: no color bands, panels, frames, borders, stickers or collage. The scene keeps its own natural colors.',
     '',
@@ -118,7 +142,7 @@ export function revisedPrompt(
       // warmth by ~5%, which no marketer would notice. So the change is asked for explicitly.
       'REFERENCE IMAGES — the first image is the current version of this ad: keep its composition, product placement and text layout. ' +
         'Apply the revision notes below clearly and visibly: someone comparing the two images must see the change at a glance. ' +
-        'The second image is the product photo: the case must match it exactly.',
+        'The second image is the product photo: the product must match it exactly.',
     );
   }
   if (opts.brandRules.length) lines.push('', 'BRAND RULES — follow all of these:', ...opts.brandRules.map((r) => `- ${r}`));

@@ -14,6 +14,18 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { buildPrompt, type Angle } from '../lib/prompt';
+import type { ProductProfile } from '../lib/profile';
+
+// The bake-off ran on Loopy before profiles existed (lib/profile.ts); this is the fixed profile
+// its prompts are rebuilt with, so a rerun still compares models on the same input.
+const loopyCase = (isHero: boolean): ProductProfile => ({
+  category: 'phone case',
+  mode: 'held',
+  use: "the phone held securely by the case's finger loop",
+  setting: 'kitchen',
+  features: ['its exact pattern and colors', 'its finish', 'the finger loop', 'the camera cutout'],
+  inUsePhoto: isHero,
+});
 import { IMAGE_MODEL } from '../lib/generate';
 
 const ROOT = path.resolve(__dirname, '..');
@@ -136,7 +148,7 @@ async function prepareSources() {
 
 async function runOne(m: Model, inp: (typeof INPUTS)[number], run: number, imageUrl: string): Promise<Result> {
   const id = `${m.key}_${inp.key}_${run}${TAG ? `-${TAG}` : ''}`;
-  const prompt = buildPrompt({ ...BRAND, productTitle: inp.title, isHero: inp.isHero, angle: angleFor(run), ...COPY });
+  const prompt = buildPrompt({ ...BRAND, productTitle: inp.title, product: loopyCase(inp.isHero), angle: angleFor(run), ...COPY });
   const base = { id, model: m.key, input: inp.key, run, usd: m.usd };
   const t0 = Date.now();
   try {
@@ -175,7 +187,7 @@ async function writeHtml() {
   const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
   const prompt = (k: string) => {
     const inp = INPUTS.find((i) => i.key === k)!;
-    return buildPrompt({ ...BRAND, productTitle: inp.title, isHero: inp.isHero, angle: angleFor(1), ...COPY });
+    return buildPrompt({ ...BRAND, productTitle: inp.title, product: loopyCase(inp.isHero), angle: angleFor(1), ...COPY });
   };
 
   const cell = (r: Result | undefined) => {

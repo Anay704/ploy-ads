@@ -171,3 +171,41 @@ Each render was compared at full size against its source photo. The logo zone wa
 **Download:** approving v3 enabled download. `/api/download/<id>` returned a 4.9 MB PNG as `loopy-raspberry-dots-guarantee-v3.png`.
 
 **Not verified:** toggling a rule off before a generation.
+
+## Beyond Loopy: four more stores (2026-11-04)
+
+The prompts and the picker were built on one store, so they were tested on four more Shopify stores, chosen to stress different things. Death Wish Coffee and Allbirds got a full round of 6. Brooklinen and Gymshark stop at the review card, because the fal balance ran out (more below).
+
+**Prompts were hard-coded to a phone case.** "The phone case … must keep its finger loop and camera cutout" would tell the model to keep parts a shoe doesn't have. Each product now gets a profile from one Haiku vision call on its actual source photo plus its Shopify title, type and tags, cached in `products.profile` (migration 0004, `lib/profile.ts`). The profile has the category, whether the product is held, worn or placed, how it's used, its room, and 3–5 visual features to keep. Scenes have one line per mode where it matters.
+- **Loopy is checked before and after, with no renders.** The profiles found the finger loop, the camera cutout and the finish on all three products unprompted. One thing was lost and put back: the specific action in the held scene ("stirring a pan"), which had become "the other hand busy". Each room now has a concrete action.
+
+**"Pick from the most common product_type" only worked for single-category stores.** Death Wish has more apparel (37) than coffee (35), Brooklinen lists 83 "Content" items, and Gymshark's types are paths like `Womens>Apparel>Leggings>full_length`. The picker now finds the store's core family from the brand's own words and ranks merch, bundles and non-products below it (PLAN.md §3). The brief says which family and why.
+
+**Bugs found by running the stores, all fixed:**
+- **Most stores got 1–2 picks, not 3.** "No look-alikes" treated any shared title word as a duplicate, and every Gymshark title says "Gymshark". Words common to the pool no longer count.
+- **Gymshark picked a tote, a bowling bag and a keyring.** Its brand text says "workout clothes and accessories", never "apparel", so only Accessories matched. Synonyms count now, and a named family must be at least 10% of the largest.
+- **"One of your 2685 best sellers."** Gymshark tags every product `most-loved`. A tag on more than half the pool is ignored.
+- **Allbirds got two seasonal picks**, one per matching collection. Now there's one.
+- **Brooklinen picked clearance as its newest product.** Its tags say "active last call" and "final sale".
+- **Brooklinen could only use 2 angles.** "award-winning sheets" didn't count as social proof.
+- **A raw collection title showed in the brief:** "Collection Data - Fall Collection - Brushed Flannel Sheets". It now reads "Fall".
+- **Gymshark's catalog hits the 10,000-product cap.** We pick from what was fetched and the brief says so.
+- **Scenes and copy (fixed after the renders, checked on prompt text only):**
+  - "In a bright entryway… walking outdoors": the `use` phrase may no longer carry a place.
+  - A foot up on a table or desk in two Allbirds ads: those scenes have worn-product lines now.
+  - Two near-identical Death Wish kitchen-counter ads: the second placed scene now puts a person in the background.
+  - "Chocolate rum ball, delicious since 2012" for an October flavor: the copy rubric now says track-record claims describe the brand.
+- **Season fit.** Allbirds' third pick was a dusty-pink flip-flop, captioned "sunny beach walks", in November. Warm-weather products (sandals, flip-flops, swim) are left out in fall and winter, and cold-weather ones in spring and summer. They're listed on the review card with "Use anyway". Verified by rerunning Allbirds research only: the flip-flop became Men's Canvas Runner NZ, and two flip-flops and a slide are listed as left out.
+- **A failed render said only "Forbidden".** It was fal's "User is locked. Reason: Exhausted balance". The error now carries fal's own reason, and an account refusal isn't retried.
+
+**Results.**
+
+| Store | Stresses | Result | Weakness |
+|---|---|---|---|
+| Loopy | Busy patterns, hand-held hero photos | 6/6 (Oct 27 round, before profiles) | Built on this store; the only one with real merchandising tags |
+| Death Wish Coffee | Brand voice, label text on a placed product | 6/6, $1.05 (1 retry for a garbled label) | Labels are a fidelity risk: the vision check caught one, and the next could pass |
+| Allbirds | Studio photography, worn shoes | 6/6, $0.90 | The generic scenes didn't know a shoe is worn (fixed, not re-rendered) |
+| Brooklinen | Home goods, lifestyle photography | Review card only | Only 17 single products in the core range, so all picks are sheets |
+| Gymshark | 10,000+ product catalog | Review card only | The picks come from the first 10,000 products, and its verified claims allow only 2 angles |
+
+Contact sheets: `docs/screenshots/stores-deathwish-round.jpg`, `docs/screenshots/stores-allbirds-round.jpg`.

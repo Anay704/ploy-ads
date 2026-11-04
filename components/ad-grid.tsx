@@ -300,7 +300,7 @@ function FeedbackDialog({ tile, open, onClose, onChanged }: { tile: AdTile; open
         >
           <textarea value={text} onChange={(e) => setText(e.target.value)} rows={3} placeholder="e.g. warmer lighting" className={`${field} resize-none`} autoFocus />
           <div className="flex flex-wrap gap-1.5">
-            {['Warmer lighting', 'Brighter background', 'Show more of the loop', 'Less busy scene'].map((s) => (
+            {['Warmer lighting', 'Brighter background', 'Show more of the product', 'Less busy scene'].map((s) => (
               <button key={s} type="button" onClick={() => setText(s)} className="rounded-full border px-2.5 py-1 text-xs text-zinc-600 hover:border-zinc-400">
                 {s}
               </button>

@@ -7,7 +7,9 @@ import sharp from 'sharp';
 import { supabaseServer, BUCKET, type Db } from './supabase/server';
 import type { Json } from './supabase/database.types';
 import { researchBrand, type BrandKit } from './brand';
+import { fallbackProfile, profileProduct, type ProductProfile, type ShopifyFacts } from './profile';
 import {
+  cleanType,
   detectShopify,
   fetchCatalog,
   fetchProduct,
@@ -46,6 +48,8 @@ export type ResearchResult =
       suggestedGoal: Goal;
       skipped: { productId: string; title: string; reason: string }[]; // passed over for the picks, and why
       catalogCount: number;
+      catalogTruncated: boolean; // the store has more than we fetch (fetchCatalog's page cap)
+      coreRange: string | null; // "Coffee (35 products), named in your brand description"
       candidates: string[]; // top 20 as one-liners: what the agent will see, never raw JSON
     };
 
@@ -77,13 +81,14 @@ export async function research(
   // Catalog and brand research are independent, so they run in parallel.
   const catalogP = (async () => {
     onProgress({ key: 'catalog', label: 'Reading the catalog', status: 'active' });
-    const raw = await fetchCatalog(shop.origin);
+    const { products: raw, truncated } = await fetchCatalog(shop.origin);
     if (target.productHandle && !raw.some((p) => p.handle === target.productHandle)) {
       const pinned = await fetchProduct(shop.origin, target.productHandle);
       if (pinned) raw.push(pinned);
     }
-    onProgress({ key: 'catalog', label: `Read the catalog: ${raw.length} products`, status: 'done' });
-    return raw.map(slimProduct);
+    const n = raw.length.toLocaleString('en-US');
+    onProgress({ key: 'catalog', label: truncated ? `Read the first ${n} products (the catalog is larger)` : `Read the catalog: ${n} products`, status: 'done' });
+    return { products: raw.map(slimProduct), truncated };
   })();
   const prevRaw = (kit.raw ?? {}) as Record<string, unknown>;
   const brandP = (async () => {
@@ -98,12 +103,19 @@ export async function research(
     onProgress({ key: 'brand', label: `Brand kit drafted: ${drafted.claims.length} verified claims`, status: 'done' });
     return drafted;
   })();
-  const [products, brand, collections] = await Promise.all([catalogP, brandP, fetchSeasonalCollections(shop.origin)]);
+  const [{ products, truncated }, brand, collections] = await Promise.all([catalogP, brandP, fetchSeasonalCollections(shop.origin)]);
 
   onProgress({ key: 'picks', label: 'Picking a best seller, a new drop and a seasonal product', status: 'active' });
-  const { picks, ordered, skipped, seasonalLabels } = pickMix(products, { today: opts.today ?? new Date(), collections, pinnedHandle: target.productHandle });
+  // The brand's own words decide its core range ("the world's strongest coffee" → Coffee, not merch).
+  const brandText = [brand.valueProp, brand.audience, shop.meta.description, brand.name].join(' ');
+  const { picks, ordered, skipped, seasonalLabels, core } = pickMix(products, {
+    today: opts.today ?? new Date(),
+    collections,
+    pinnedHandle: target.productHandle,
+    brandText,
+  });
   const rankById = new Map(ordered.map((r) => [r.shopifyId, r]));
-  onProgress({ key: 'picks', label: `Picked ${picks.map((p) => p.title).join(', ')}`, status: 'done' });
+  onProgress({ key: 'picks', label: `Picked ${picks.map((p) => p.title).join(', ')}${core ? ` from ${core.label}` : ''}`, status: 'done' });
 
   // Every slimmed product is stored so the review card's Swap picker can offer the rest.
   const rows = products.map((p) => {
@@ -133,11 +145,11 @@ export async function research(
     for (const row of chunk) saved.set(row.shopify_id, row.id);
   }
 
-  onProgress({ key: 'photos', label: 'Saving the logo and product photos', status: 'active' });
+  onProgress({ key: 'photos', label: 'Saving the logo and reading each product photo', status: 'active' });
   const logoAssetId = brand.logoUrl ? await copyLogo(db, kit.id, brand.logoUrl) : null;
   const recommended = await Promise.all(picks.map((p) => copyPick(db, kit.id, saved.get(p.shopifyId)!, p, p.slot)));
   await removeUnusedProductImages(db, kit.id, new Set(recommended.map((r) => r.imageAssetId)));
-  onProgress({ key: 'photos', label: `Saved the logo and ${recommended.length} product photos`, status: 'done' });
+  onProgress({ key: 'photos', label: `Saved the logo and ${recommended.length} product photos, with what each must keep`, status: 'done' });
 
   const { raw, ...brandKit } = brand;
   must(
@@ -159,6 +171,7 @@ export async function research(
           rejectedClaims: brand.rejectedClaims,
           sources: brand.sources,
           // productId → "From your Fall Favorites collection", for re-suggesting the goal after a swap.
+          catalog: { count: products.length, truncated, core: core ? `${core.label} (${core.count} products), ${core.reason}` : null },
           seasonal: Object.fromEntries([...seasonalLabels].flatMap(([shopifyId, label]) => (saved.has(shopifyId) ? [[saved.get(shopifyId)!, label]] : []))),
         } as Json,
         status: 'draft',
@@ -176,6 +189,8 @@ export async function research(
     suggestedGoal: suggestGoal(picks),
     skipped: skipped.flatMap((s) => (saved.has(s.shopifyId) ? [{ productId: saved.get(s.shopifyId)!, title: s.title, reason: s.reason }] : [])),
     catalogCount: products.length,
+    catalogTruncated: truncated,
+    coreRange: core ? `${core.label} (${core.count} products), ${core.reason}` : null,
     candidates: ordered.slice(0, 20).map(oneLiner),
   };
 }
@@ -262,8 +277,29 @@ export async function ensureProductImage(
   return { assetId, path };
 }
 
+/**
+ * The product's profile (lib/profile.ts), read once from its Shopify data and the photo the ad
+ * is built from, then cached on the row. A failed vision call falls back to product_type and
+ * generic fidelity wording, and isn't cached, so the next round tries again.
+ */
+export async function ensureProfile(db: Db, productId: string, facts: ShopifyFacts, imagePath: string): Promise<ProductProfile> {
+  const row = must(await db.from('products').select('profile').eq('id', productId).single(), 'load profile');
+  if (row.profile) return row.profile as ProductProfile;
+  try {
+    const { data, error } = await db.storage.from(BUCKET).download(imagePath);
+    if (error) throw error;
+    const profile = await profileProduct(Buffer.from(await data.arrayBuffer()), facts);
+    must(await db.from('products').update({ profile: profile as unknown as Json }).eq('id', productId).select('id'), 'save profile');
+    return profile;
+  } catch (e) {
+    console.warn(`profile failed for ${facts.title}: ${(e as Error).message}`);
+    return fallbackProfile(facts);
+  }
+}
+
 async function copyPick(db: Db, brandKitId: string, productId: string, p: RankedProduct, slot: Slot): Promise<Recommended> {
   const { assetId: imageAssetId, path } = await ensureProductImage(db, brandKitId, productId, p);
+  await ensureProfile(db, productId, { title: p.title, productType: cleanType(p.productType), tags: p.tags }, path);
   return {
     productId,
     title: p.title,

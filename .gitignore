@@ -26,3 +26,6 @@ npm-debug.log*
 
 # Full-size bake-off renders are large; thumbnails, sources, results.json and scores.json are kept.
 bakeoff/out/
+
+# Local reference only, not part of the submission repo
+NOTE.md

@@ -98,6 +98,8 @@ export function createTools(ctx: CampaignContext) {
           suggestedGoal: r.suggestedGoal,
           skipped: r.skipped,
           catalogCount: r.catalogCount,
+          catalogTruncated: r.catalogTruncated,
+          coreRange: r.coreRange,
           candidates: r.candidates,
         };
       },

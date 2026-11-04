@@ -92,8 +92,13 @@ Grid buttons call the same logic through server actions (`lib/generate.ts`) with
 - **URL normalization.** A `/products/<handle>` URL goes to `/products/<handle>.json`, and that product is pinned as pick #1. Any other URL is treated as the store root.
 - **Shopify detection.** `GET /meta.json` and `GET /products.json?limit=1` must both return JSON with the expected shape. Otherwise the tool returns `not_shopify`.
 - **Fetch and slim, server side.** The app pages through `/products.json?limit=250` until a page comes back empty, about 6.7 MB for Loopy. It keeps only the needed fields: `id, handle, title, product_type, tags(filtered), price, compare_at_price, available, description(text), images[{src, position, isHero}]`. The LLM never sees raw JSON. It sees at most 20 pre-ranked candidates as one-liners.
-- **Tag filter.** The tag list is an allowlist built at runtime. Internal tags are dropped by regex: `/^contains /i`, `/UNI$/`, `/^pf-/`, `/^pc-/`, `/^is-/`, `testpromo`, `LTE`, any `key:value` tag (`auto-select:off`), and device codes or screen sizes (`i13`, `S24`, `6.1`). Kept tags are lowercased. The rules come from Loopy's real 49 distinct tags and are covered by `lib/shopify.test.ts`.
-- **Ranking.** Only available products with type `cases` (or the store's dominant type) are considered. The base order is `best seller` > `new` > `limited` > the rest, with `last call` pushed down. Ties break by having at least 3 hero images, then by recency. This order feeds the agent's top-20 candidates and the Swap picker. The first image is never taken blindly.
+- **Tag filter.** The tag list is an allowlist built at runtime. Internal tags are dropped by regex: `/^contains /i`, `/UNI$/`, `/^pf-/`, `/^pc-/`, `/^is-/`, `testpromo`, `LTE`, any `key:value` tag (`auto-select:off`), and device codes or screen sizes (`i13`, `S24`, `6.1`). Warehouse, feed and app tags from the multi-store runs are dropped too: dates (`11/3/26`), long numbers, tags with `# | _ @ (`, and words like wave, truck, feed, blocklist, yotpo (`wc wave 1 truck #1-#16 7.30.2026`). Kept tags are lowercased. The rules come from Loopy's real 49 distinct tags and are covered by `lib/shopify.test.ts`.
+- **Core range (changed after M7, for multi-category stores).** "The store's dominant type" only worked for Loopy: Death Wish Coffee has more apparel than coffee, Brooklinen lists 83 "Content" items, Gymshark's types are paths like `Womens>Apparel>Leggings>full_length`. Now:
+  - **Type family.** Products are grouped by the first meaningful segment of `product_type` (gender segments dropped): `Apparel` for Gymshark, the flat type elsewhere. `cleanType` gives the readable leaf ("Leggings") for the product profile.
+  - **Core family.** One named in the brand's own words (value prop, audience, store description; "clothes" counts for apparel, "bedding" for sheets) wins, non-merch first, if it holds at least 10% of the largest family. Otherwise the largest non-merch family, otherwise the largest. The review card says which: "Picked from Coffee (35 products), named in your brand description."
+  - **Order.** Core products, then other products, merch (apparel, accessories, mugs…), bundles, then non-products (`Content`, gift cards, samples, package protection, $0 items). The named slots only use single core products; the rest only fill a slot nothing else can.
+- **Ranking within a family.** The base order is `best seller` > `new` > `limited` > the rest, with `last call` pushed down. Ties break by having at least 3 hero images, then by recency. A merchandising tag on more than half of a 20+ product pool is ignored: Gymshark puts `most-loved` on every product. Synonyms are normalized (`most-loved`, `bestseller` → best seller; `new-releases`, `newarrivals` → new; `final sale`, `clearance` → last call). This order feeds the agent's top-20 candidates and the Swap picker. The first image is never taken blindly.
+- **Huge catalogs.** Fetching stops at 40 pages (10,000 products, about 25 s for Gymshark). The picks come from what was fetched, and the brief says "from the first 10,000 products: the catalog is larger". A failed page is retried once, so a rate limit doesn't look like a small catalog.
 - **The 3 picks are a mix, not the top 3** (`pickMix`, decided after the first Loopy run, where the top 3 were all 2025 best sellers):
   1. **Best seller:** the top `best seller` by the base order.
   2. **Newest:** the most recently published product, preferring at least 3 hero images.
@@ -103,7 +108,9 @@ Grid buttons call the same logic through server actions (`lib/generate.ts`) with
   - **Too-close holidays are skipped everywhere.** A product whose title or tags are themed on a holiday under 14 days away is skipped from every slot (Halloween designs on 2026-10-27), because ads need time to ramp. Holidays are fixed-date only: Valentine's, St. Patrick's, Fourth of July, Halloween, Christmas. Keyword patterns are in `lib/seasons.ts`.
   - **No clearance unless nothing else fits.** `last call` products only fill a slot when nothing else can, even if they're on sale.
   - **Pinned first.** A pinned product (from a `/products/<handle>` URL) takes the first place.
-  - **No look-alikes.** A product that shares a title word with an earlier pick is passed over, so "Java Dots" doesn't follow "Raspberry Dots".
+  - **No look-alikes.** A product that shares a title word with an earlier pick is passed over, so "Java Dots" doesn't follow "Raspberry Dots". Words common to the pool don't count (in 15% of titles for 20+ products, half for smaller pools): every Gymshark title says "Gymshark" and Allbirds' say "Men's" or "Women's", which left those stores with 1–2 picks. If the core range runs out of distinct products, a look-alike core product beats going outside it.
+  - **One seasonal pick**, even when several seasonal collections match (Allbirds had two).
+  - **Season fit.** Warm-weather products (sandals, flip-flops, slides, swim) don't fill a slot in fall or winter, and cold-weather ones (puffers, parkas, beanies) don't in spring or summer, unless nothing else can (`offSeason` in `lib/seasons.ts`). The top 3 left out are listed on the review card with "Use anyway". Year-round materials (wool, flannel, fleece) are deliberately not listed.
   - **Reasons are saved.** Each pick's reason is saved as `products.rank_reason`, and the picks hold ranks 1–3.
   - **Storage stays minimal.** Product photos copied for earlier picks are deleted on a rerun unless an ad uses them.
 - **Images.** "Hero" means an image with no `variant_ids`. These come first, and studio cutouts are the fallback. Every image is fetched as `src + ?width=1080&format=jpg`. Shopify's CDN ignores `format=jpg` for GIFs and returns the GIF (checked 2026-10-26), so `.gif` sources use `format=png`, which does flatten the first frame, and `sharp` re-encodes the result to JPEG. `width` never upscales: the GIF cutouts stay 720×960.
@@ -132,7 +139,7 @@ create type feedback_scope as enum ('ad','campaign');
 | Table | Columns | Notes |
 |---|---|---|
 | `brand_kits` | `id uuid pk`, `owner_id uuid null` (auth later), `store_url`, `domain unique`, `name`, `logo_asset_id → assets`, `colors jsonb` (`{primary,secondary,accent,background,text}`), `fonts text[]`, `voice jsonb` (`{adjectives[], sample}`), `value_prop`, `audience`, `claims text[]`, `claim_groups jsonb` (`[{topic, claims[]}]`, migration 0002), `short_name` (what ads call the brand, migration 0002), `raw jsonb` (Firecrawl scrape cache + meta, for debugging), `status brand_status`, `created_at` | Each domain is researched once, and a rerun refreshes it |
-| `products` | `id uuid pk`, `brand_kit_id → brand_kits`, `shopify_id bigint`, `handle`, `title`, `product_type`, `tags text[]` (filtered), `price numeric`, `compare_at_price numeric null`, `available bool` (ranking and the Swap picker only offer available products), `description`, `images jsonb` (`[{id,src,position,isHero}]`, URLs only; `id` is Shopify's image id, used in the Storage path), `rank int`, `rank_reason` | `unique(brand_kit_id, shopify_id)`. Images stay as CDN URLs until used |
+| `products` | `id uuid pk`, `brand_kit_id → brand_kits`, `shopify_id bigint`, `handle`, `title`, `product_type`, `tags text[]` (filtered), `price numeric`, `compare_at_price numeric null`, `available bool` (ranking and the Swap picker only offer available products), `description`, `images jsonb` (`[{id,src,position,isHero}]`, URLs only; `id` is Shopify's image id, used in the Storage path), `rank int`, `rank_reason`, `profile jsonb null` (category, mode, use, setting, features; migration 0004, §5 Product profile) | `unique(brand_kit_id, shopify_id)`. Images stay as CDN URLs until used |
 | `campaigns` | `id uuid pk`, `brand_kit_id`, `owner_id null`, `name`, `status campaign_status` (`briefing` → `active`, migration 0003), `source_url` (what was pasted), `goal campaign_goal null` (set on confirm), `product_ids uuid[]`, `chat jsonb` (UIMessage[] for reload), `created_at` | Created when research starts. A check constraint requires goal and products once `active` |
 | `ads` | `id uuid pk`, `campaign_id`, `product_id`, `angle ad_angle`, `source_asset_id → assets` (the product photo used), `current_variant_id → ad_variants null`, `created_at` | An ad is a concept: one product × one angle |
 | `ad_variants` | `id uuid pk`, `ad_id`, `campaign_id` (denormalized for Realtime filtering), `parent_variant_id null`, `version int`, `headline`, `cta`, `prompt text` (exact prompt sent), `model`, `fal_request_id`, `asset_id → assets null`, `status variant_status`, `error`, `text_check jsonb null` (vision check result), `cost_usd numeric`, `created_at` | Each render is one row. Approval happens per variant |
@@ -206,9 +213,11 @@ Model parameters:
 ```
 Create a full-screen vertical 9:16 mobile ad (portrait interstitial) for {brand.shortName}.
 
-PRODUCT — use the reference image exactly. The phone case "{product.title}" must keep its exact
-pattern, colors, finish, finger loop and camera cutout. Do not redraw, restyle or add products.
-{isHero ? "Keep the hand and loop interaction from the photo." : "Place the case in a fitting lifestyle scene."}
+PRODUCT — use the reference image exactly. The {profile.category} "{product.title}" must keep its exact look:
+- {profile.features[0..4]}          ← read from the actual photo (below)
+Match the photo exactly in proportions, colors and finish.
+Do not redraw, restyle or add products. Only this one {profile.category} appears.
+{profile.inUsePhoto ? "Keep the interaction from the photo: {profile.use}." : per-mode placement line}
 
 SCENE — {angleScene}. Palette: {colors.primary}, {colors.secondary}, {colors.background}.
 Mood: {voice.adjectives}. Leave the top 12% clear (logo goes there).
@@ -221,6 +230,16 @@ No other words, prices, logos or watermarks.
 {brandRules}      ← campaign-level feedback, as "Always/Never…" lines
 {revisionNotes}   ← ad-level feedback for this ad's lineage, newest last
 ```
+
+**Product profile (added after M7, `lib/profile.ts`).** The template above first hard-coded Loopy: "the phone case … finger loop and camera cutout". On a shoe or a coffee bag that tells the model to keep parts that don't exist. So each product gets a profile, made once by a Claude Haiku 5.5 vision call that sees the ad's actual source photo plus the Shopify `title`, `product_type` and `tags`, and cached in `products.profile` (migration 0004):
+- `category`: what it is ("phone case", "running shoes", "bag of coffee").
+- `mode`: `held` (in a hand), `worn` (on a body) or `placed` (set in a room). Scenes that depend on it have one line per mode.
+- `use`: how a person uses it ("the phone held securely by the case's finger loop"), used in benefit scenes and, when the photo already shows it in use, as the interaction to keep.
+- `setting`: one of a fixed list of rooms, so a scene never reads "in a bright anywhere".
+- `features`: 3–5 concrete visual features to preserve (pattern, colors, shape, label, distinctive parts).
+- `inUsePhoto`: replaces `isHero`, which meant "no variant_ids" and only implied a hand on Loopy.
+
+It runs during research for the 3 picks, and on first generation for a product swapped in later. If the call fails, the profile falls back to `product_type` and generic fidelity wording, and isn't cached. The text and defect check say "the product", not "the phone case".
 
 **Copy candidates (added before M5).** Each draft is 3 headline candidates. The claim guardrails below run on each one, and a second, cheap call (Claude Haiku 5.5) scores the survivors 1–5 against a rubric and picks the best:
 - specific to the design or claim;

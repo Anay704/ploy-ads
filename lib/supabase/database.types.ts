@@ -379,6 +379,7 @@ export type Database = {
           images: Json;
           price: number;
           product_type: string | null;
+          profile: Json | null;
           rank: number | null;
           rank_reason: string | null;
           shopify_id: number;
@@ -396,6 +397,7 @@ export type Database = {
           images?: Json;
           price: number;
           product_type?: string | null;
+          profile?: Json | null;
           rank?: number | null;
           rank_reason?: string | null;
           shopify_id: number;
@@ -413,6 +415,7 @@ export type Database = {
           images?: Json;
           price?: number;
           product_type?: string | null;
+          profile?: Json | null;
           rank?: number | null;
           rank_reason?: string | null;
           shopify_id?: number;

@@ -113,7 +113,7 @@ const Drafts = z.object({
 });
 
 const ANGLE_BRIEF: Record<Angle, string> = {
-  benefit: 'what the product does for the customer (grip, security, comfort)',
+  benefit: 'what the product does for the customer (how it works, feels or fits, or the problem it solves)',
   social_proof: 'that people love it, using the review or trust claim',
   offer: 'the real discount, quoting the price exactly',
   aesthetic: 'the look of this specific design and the season; no facts needed',
@@ -128,6 +128,8 @@ export const COPY_RUBRIC = [
   'Benefit-led: the shopper sees what is in it for them.',
   'Natural grammar: read it aloud. It sounds like something a person would say, with no dropped words and no odd phrasing.',
   'No invented words, forced puns or portmanteaus.',
+  // Seen live on Death Wish: "Chocolate rum ball, delicious since 2012" for a flavor launched in October.
+  'True to the claim: a track-record claim ("since 2012", "trusted by 70,000") is about the brand, so say it of the brand, never of this product.',
   'Short: under 6 words when possible.',
   'Sentence case: capitalize only the first word and names (the brand, the product), never Title Case.',
 ];

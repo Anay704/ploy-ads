@@ -6,6 +6,10 @@ import {
   pickMix,
   pickSourceImage,
   rankProducts,
+  coreFamily,
+  productKind,
+  cleanType,
+  typeFamily,
   slimProduct,
   suggestGoal,
   type RawProduct,
@@ -111,14 +115,64 @@ test('rankProducts breaks ties on 3+ hero images, then recency', () => {
   );
 });
 
-test('rankProducts keeps only available products of the dominant type', () => {
+test('rankProducts drops unavailable products and ranks other types below the core one', () => {
   const ranked = rankProducts([
     product({ title: 'Case A' }),
     product({ title: 'Case B' }),
     product({ title: 'Sold Out', tags: ['best seller'], available: false }),
     product({ title: 'Loop', productType: 'Loops', tags: ['best seller'] }),
   ]);
-  assert.deepEqual(ranked.map((p) => p.title).sort(), ['Case A', 'Case B']);
+  assert.deepEqual(ranked.map((p) => p.title), ['Case A', 'Case B', 'Loop']);
+  assert.match(ranked[2].rankReason, /^outside your core range/);
+});
+
+// ── Multi-category stores (Death Wish Coffee, Brooklinen, Gymshark, Allbirds; 2026-11-04) ──
+
+test('the core range comes from the brand text, not the largest type: coffee beats apparel', () => {
+  const store = [
+    ...Array.from({ length: 6 }, (_, i) => product({ title: `Tee ${i}`, productType: 'Apparel', tags: ['best seller'] })),
+    ...Array.from({ length: 5 }, (_, i) => product({ title: `Roast ${i}`, productType: 'Coffee' })),
+    product({ title: 'Mug', productType: 'Mugs' }),
+  ];
+  assert.equal(coreFamily(store, "The world's strongest coffee")?.label, 'Coffee');
+  // Without a brand match, the largest non-merch family still wins over apparel.
+  assert.equal(coreFamily(store, '')?.label, 'Coffee');
+  const { picks } = pickMix(store, { today: TODAY, brandText: "The world's strongest coffee" });
+  assert.ok(picks.every((p) => p.productType === 'Coffee'), picks.map((p) => p.title).join());
+});
+
+test('bundles and non-products are skipped while single products exist', () => {
+  assert.equal(productKind({ productType: 'Content', title: 'Sleep guide', price: 0 }), 'non_product');
+  assert.equal(productKind({ productType: 'Gift Card', title: 'Gift Card', price: 25 }), 'non_product');
+  assert.equal(productKind({ productType: 'Sheets', title: 'Luxe Sateen Hardcore Bundle', price: 606 }), 'bundle');
+  assert.equal(productKind({ productType: 'Sheets', title: 'Essential Sheet Set', price: 149 }), 'product');
+  const store = [
+    ...Array.from({ length: 8 }, (_, i) => product({ title: `Bundle ${i}`, productType: 'Bundle', tags: ['best seller'] })),
+    ...Array.from({ length: 4 }, (_, i) => product({ title: `Sheet ${['Linen', 'Sateen', 'Percale', 'Flannel'][i]}`, productType: 'Sheets' })),
+    product({ title: 'How we source', productType: 'Content', price: 0 }),
+  ];
+  const { picks } = pickMix(store, { today: TODAY });
+  assert.equal(picks.length, 3);
+  assert.ok(picks.every((p) => p.productType === 'Sheets'));
+});
+
+test('path-style types use their meaningful segments', () => {
+  assert.equal(cleanType('Womens>Apparel>Leggings>full_length'), 'Leggings');
+  assert.equal(typeFamily('Mens>Apparel>SS Tops>t_shirt'), 'apparel');
+  assert.equal(typeFamily('Cases'), 'cases');
+});
+
+test('a word every title shares (the brand, "Men\'s") does not make products look alike', () => {
+  const titles = Array.from({ length: 24 }, (_, i) => `Gymshark ${['Vital', 'Apex', 'Crest', 'Arrival', 'Legacy', 'Power'][i % 6]} ${['Leggings', 'Shorts', 'Tank', 'Hoodie'][i % 4]} ${i}`);
+  const store = titles.map((t, i) => product({ title: t, productType: 'Womens>Apparel>Leggings>full_length', publishedAt: `2026-0${1 + (i % 9)}-01T00:00:00Z` }));
+  assert.equal(pickMix(store, { today: TODAY }).picks.length, 3);
+});
+
+test('warehouse and system tags are filtered, and merchandising synonyms are normalized', () => {
+  assert.deepEqual(
+    filterTags(['wc wave 1 truck #1-#16 7.30.2026', '11/3/26 drop', 'gcxu5198421 (pl 555111127599)', 'oos dns', 'ec stock', 'yblocklist', 'ygroup_ygroup_mens', 'feedonomics-include', 'bundle_product|1|all', 'yellow', 'Most-Loved', 'new-releases', 'NewArrivals']),
+    ['yellow', 'best seller', 'new'],
+  );
 });
 
 test('rankProducts puts a pinned product first, even from another type', () => {
@@ -282,4 +336,33 @@ test('pickMix labels every seasonal product, so a swap can re-suggest the goal',
   const { seasonalLabels } = pickMix(all, { today: TODAY, collections });
   assert.equal(seasonalLabels.get(items.nightSky.shopifyId), 'From your Fall Favorites collection');
   assert.equal(seasonalLabels.get(items.cocoa.shopifyId), undefined);
+});
+
+test('Gymshark: "workout clothes and accessories" means apparel, not the much smaller accessories range', () => {
+  const store = [
+    ...Array.from({ length: 30 }, (_, i) => product({ title: `Legging ${i}`, productType: 'Womens>Apparel>Leggings>full_length' })),
+    ...Array.from({ length: 2 }, (_, i) => product({ title: `Keyring ${i}`, productType: 'Accessories>Keyrings' })),
+  ];
+  assert.equal(coreFamily(store, 'performance workout clothes and accessories')?.label, 'Apparel');
+});
+
+test('a merchandising tag on nearly every product is not a signal ("One of your 2685 best sellers")', () => {
+  const store = Array.from({ length: 30 }, (_, i) => product({ title: `Item ${String.fromCharCode(65 + i)}${i}`, tags: ['best seller'], publishedAt: `2026-0${1 + (i % 9)}-01T00:00:00Z` }));
+  const { picks } = pickMix(store, { today: TODAY });
+  assert.ok(!picks.some((p) => p.slot === 'best_seller'));
+});
+
+test('season fit: summer products are left out of a November round, and the review card says why', () => {
+  const nov = new Date('2026-11-04T12:00:00Z');
+  const store = [
+    product({ title: 'Flip Flop - Dusty Pink', productType: 'Shoes', publishedAt: '2026-11-01T00:00:00Z' }),
+    product({ title: 'Tree Runner', productType: 'Shoes' }),
+    product({ title: 'Wool Lounger', productType: 'Shoes' }),
+    product({ title: 'Cruiser', productType: 'Shoes' }),
+  ];
+  const { picks, skipped } = pickMix(store, { today: nov });
+  assert.ok(!picks.some((p) => p.title.startsWith('Flip Flop')));
+  assert.deepEqual(skipped.map((s) => s.reason), ["a warm-weather product, and it's fall"]);
+  // In July the same product is fair game.
+  assert.ok(pickMix(store, { today: new Date('2026-07-01T12:00:00Z') }).picks.some((p) => p.title.startsWith('Flip Flop')));
 });

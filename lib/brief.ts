@@ -38,6 +38,8 @@ export type BriefProduct = {
 };
 
 export type BriefData = {
+  /** Where the picks came from, e.g. "From Coffee (35 products) · first 10,000 products of a larger catalog". */
+  catalogNote: string | null;
   campaignId: string;
   status: 'briefing' | 'active';
   goal: (typeof GOALS)[number] | null;

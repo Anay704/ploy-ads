@@ -66,7 +66,7 @@ export function RulesPanel({ campaignId, refreshKey }: { campaignId: string; ref
         <input
           value={text}
           onChange={(e) => setText(e.target.value)}
-          placeholder="Add a rule, e.g. always show the finger loop"
+          placeholder="Add a rule, e.g. never use dark backgrounds"
           className="flex-1 rounded-lg border border-zinc-200 px-3 py-1.5 text-sm outline-none focus:border-zinc-500"
         />
         <button type="submit" disabled={pending || !text.trim()} className="inline-flex items-center gap-1 rounded-lg bg-zinc-900 px-3 text-sm font-medium text-white disabled:opacity-50">

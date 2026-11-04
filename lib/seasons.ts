@@ -74,3 +74,18 @@ export function holidayInWindow(h: Holiday, today: Date): boolean {
   const d = daysUntil(h, today);
   return d >= MIN_HOLIDAY_LEAD_DAYS && d <= MAX_HOLIDAY_LEAD_DAYS;
 }
+
+// Products made for one half of the year (matched on title, type and tags). Seen live on
+// Allbirds on 2026-11-04: dusty-pink flip-flops promised "sunny beach walks" in a November
+// campaign. Year-round materials (wool, flannel, fleece) are deliberately not listed.
+const WARM_ONLY = /flip[- ]?flops?|sandals?|\bslides?\b|swim|bikini|board ?shorts|sun ?hats?|\bbeach\b/i;
+const COLD_ONLY = /puffer|parka|snow ?boots?|beanie|mittens?|ski (?:jacket|pants)|thermal|insulated (?:jacket|boot)/i;
+
+/** Why a product is wrong for today's season, or null if it fits. */
+export function offSeason(text: string, today: Date): string | null {
+  const season = currentSeason(today);
+  const cold = season === 'fall' || season === 'winter';
+  if (cold && WARM_ONLY.test(text)) return `a warm-weather product, and it's ${season}`;
+  if (!cold && COLD_ONLY.test(text)) return `a cold-weather product, and it's ${season}`;
+  return null;
+}

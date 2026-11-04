@@ -120,6 +120,7 @@ export async function loadBrief(campaignId: string, brandKitId: string, productI
 
   return {
     campaignId,
+    catalogNote: catalogNoteOf(kit.raw),
     status: campaign.status,
     goal: campaign.goal,
     brandKit: {
@@ -151,6 +152,14 @@ async function storedImages(brandKitId: string, productIds: string[]): Promise<M
     if (productIds.includes(productId)) map.set(productId, db.storage.from(BUCKET).getPublicUrl(a.storage_path).data.publicUrl);
   }
   return map;
+}
+
+/** Saved by research in brand_kits.raw.catalog: what the picks were drawn from, and whether the catalog was cut off. */
+function catalogNoteOf(raw: unknown): string | null {
+  const c = (raw as { catalog?: { count: number; truncated: boolean; core: string | null } } | null)?.catalog;
+  if (!c) return null;
+  const parts = [c.core ? `Picked from ${c.core}` : null, c.truncated ? `from the first ${c.count.toLocaleString('en-US')} products: the catalog is larger` : null];
+  return parts.filter(Boolean).join(', ') || null;
 }
 
 function seasonalOf(raw: unknown): Record<string, string> {

@@ -1,6 +1,6 @@
 // The vision text check (PLAN.md §5): a cheap vision model reads the raw render, and code
 // decides. The headline and CTA must each appear exactly once, spelled exactly, with no other
-// legible words. Text printed on the product itself (the "loopy" loop, the p mark) is allowed.
+// legible words. Text printed on the product itself (Loopy's "loopy" loop, a coffee bag's label) is allowed.
 
 import { generateText, Output } from 'ai';
 import { z } from 'zod';
@@ -10,12 +10,12 @@ export const TEXT_CHECK_MODEL = 'claude-haiku-5-5';
 
 const Reading = z.object({
   adText: z.array(z.string()).describe('every piece of overlaid ad text (headline, button, captions), one entry per occurrence, exactly as spelled'),
-  productText: z.array(z.string()).describe('text printed or embossed on the phone case itself'),
+  productText: z.array(z.string()).describe('text printed or embossed on the product itself: its label, logo or packaging print'),
   sceneText: z.array(z.string()).describe('legible words on anything else in the scene: signs, cups, packaging, books. Skip illegible or blurred marks.'),
   defects: z
     .array(z.string())
     .describe(
-      'clear, obvious visual defects only: malformed hands or fingers (extra, missing or fused fingers, an impossible grip), a warped, melted or duplicated phone case, or text touching or cut off by the image edge. Empty if none.',
+      'clear, obvious visual defects only: malformed hands or fingers (extra, missing or fused fingers, an impossible grip), a warped, melted or duplicated product, a product shown twice, or text touching or cut off by the image edge. Empty if none.',
     ),
 });
 export type TextReading = z.infer<typeof Reading>;
@@ -63,8 +63,8 @@ export async function checkRenderText(image: Buffer, headline: string, cta: stri
           {
             type: 'text',
             text:
-              'Transcribe every legible piece of text in this ad image, exactly as spelled, sorted into ad text, text on the phone case, and text elsewhere in the scene. List repeated text once per occurrence. Do not correct spelling. ' +
-              'Then look closely at hands, fingers, the phone case and the image edges, and list any clear visual defect. Only report what is obviously wrong.',
+              'Transcribe every legible piece of text in this ad image, exactly as spelled, sorted into ad text, text on the product itself, and text elsewhere in the scene. List repeated text once per occurrence. Do not correct spelling. ' +
+              'Then look closely at hands, fingers, feet, the product and the image edges, and list any clear visual defect. Only report what is obviously wrong.',
           },
         ],
       },

@@ -196,6 +196,7 @@ export function ReviewCard({
       </header>
 
       <Section title="Products" aside="3 products × 2 angles each">
+        {brief.catalogNote && <p className="-mt-2 text-xs text-zinc-500">{brief.catalogNote}.</p>}
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
           {products.map((p, i) => (
             <ProductTile

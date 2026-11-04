@@ -10,9 +10,9 @@ import { planRound, SCENES, type Angle } from './angles';
 import type { CampaignGoal } from './agent-goals';
 import { writeCopy } from './copy';
 import { buildPrompt, EDIT_PREFIX, REVISION_MARKER } from './prompt';
-import { ensureProductImage, must } from './research';
+import { ensureProductImage, ensureProfile, must } from './research';
 import { currentSeason } from './seasons';
-import { pickSourceImage, type ShopifyImage } from './shopify';
+import { cleanType, type ShopifyImage } from './shopify';
 import { BUCKET, supabaseServer, type Db } from './supabase/server';
 import type { Json } from './supabase/database.types';
 import { checkRenderText } from './text-check';
@@ -53,12 +53,19 @@ function falClient() {
 
 const publicUrl = (db: Db, path: string) => db.storage.from(BUCKET).getPublicUrl(path).data.publicUrl;
 
-/** "fetch failed" alone hides the reason; the cause (ECONNRESET, a timeout) is what helps. */
+/**
+ * "fetch failed" alone hides the reason; the cause (ECONNRESET, a timeout) is what helps. fal's
+ * errors carry theirs in body.detail: a plain "Forbidden" was an exhausted fal balance.
+ */
 const describe = (e: unknown) => {
-  const err = e as Error & { cause?: { code?: string; message?: string } };
-  const cause = err.cause?.code ?? err.cause?.message;
+  const err = e as Error & { cause?: { code?: string; message?: string }; body?: { detail?: unknown } };
+  const detail = typeof err.body?.detail === 'string' ? err.body.detail : null;
+  const cause = detail ?? err.cause?.code ?? err.cause?.message;
   return cause ? `${err.message} (${cause})` : err.message;
 };
+
+/** fal refuses the account itself (bad key, no balance): a second attempt can't succeed. */
+const accountRefused = (e: unknown) => [401, 403].includes((e as { status?: number }).status ?? 0);
 
 /**
  * Network I/O (Storage, the database, downloads) retries itself: a blip must not cost a paid
@@ -118,7 +125,7 @@ export async function prepareRound(campaignId: string, opts: { productIds?: stri
   );
   const productIds = opts.productIds?.length ? opts.productIds.filter((id) => campaign.product_ids.includes(id)) : campaign.product_ids;
   const products = must(
-    await db.from('products').select('id, title, price, compare_at_price, tags, description, images').in('id', productIds),
+    await db.from('products').select('id, title, price, compare_at_price, tags, description, images, product_type').in('id', productIds),
     'load products',
   );
   const { count } = await db.from('ad_variants').select('id', { count: 'exact', head: true }).eq('campaign_id', campaignId);
@@ -189,11 +196,12 @@ export async function prepareRound(campaignId: string, opts: { productIds?: stri
       const p = ordered.find((x) => x.id === ad.productId)!;
       const images = (p.images ?? []) as ShopifyImage[];
       const source = await ensureProductImage(db, kit.id, p.id, { title: p.title, images });
+      const profile = await ensureProfile(db, p.id, { title: p.title, productType: cleanType(p.product_type ?? ''), tags: p.tags }, source.path);
       const copy = copies[i];
       const prompt = buildPrompt({
         brandName,
         productTitle: p.title,
-        isHero: pickSourceImage({ images })?.isHero ?? false,
+        product: profile,
         angle: copy.angle,
         scene: scenes[i],
         season,
@@ -252,7 +260,7 @@ export async function runVariant(variantId: string, opts: { resumeRequestId?: st
       } else {
         // Which references a version renders from (PLAN.md §5, §6): a new ad or a regenerate uses
         // the product photo; a copy edit only the previous raw render (so nothing else moves); a
-        // revision the previous render first, then the product photo to keep the case exact.
+        // revision the previous render first, then the product photo to keep the product exact.
         const prompt = v.prompt ?? '';
         const parentRaw = v.parent_variant_id ? `campaigns/${v.campaign_id}/${v.ad_id}/${v.parent_variant_id}.raw.png` : null;
         const paths = prompt.startsWith(EDIT_PREFIX) ? [parentRaw] : prompt.includes(REVISION_MARKER) ? [parentRaw, sourcePath] : [sourcePath];
@@ -303,6 +311,7 @@ export async function runVariant(variantId: string, opts: { resumeRequestId?: st
     } catch (e) {
       lastError = e instanceof TextCheckFailed ? e.message : `render failed: ${describe(e)}`;
       console.warn(`variant ${variantId} attempt ${attempt + 1}: ${lastError}`);
+      if (accountRefused(e)) break;
     }
   }
   await withRetry(async () => db.from('ad_variants').update({ status: 'failed', error: lastError, cost_usd: spent }).eq('id', variantId).eq('status', 'generating'));
